@@ -22,8 +22,20 @@ def store(address, data, ack=b'\x40'):
 READY = [read(0x1002, 0)]
 
 
+def block_read(address, data):
+    script = []
+    for offset in range(0, len(data), 256):
+        chunk = data[offset:offset + 256]
+        a = address + offset
+        script.append(packet(f'55 69 {a & 255:02x} {a >> 8:02x}', b'\x40'))
+        if len(chunk) > 1:
+            script.append(packet(f'55 a0 {len(chunk) - 1:02x}'))
+        script.append(packet('55 24', chunk))
+    return script
+
+
 def page_read(page, data):
-    return READY + [read(0x8000 + page * 64 + i, v) for i, v in enumerate(data)]
+    return READY + block_read(0x8000 + page * 64, data)
 
 
 def program(page, data):
@@ -163,11 +175,11 @@ class NvmTest(unittest.TestCase):
 
     def erase_script(self, saved):
         script = READY + [read(0x1285, 0xf6 | saved)]
-        script += [read(0x1400 + i, i) for i in range(64)]
+        script += block_read(0x1400, bytes(range(64)))
         script += READY + store(0x1000, [5]) + READY
         for p in range(32):
             script += page_read(p, self.blank)
-        script += [read(0x1400 + i, i if saved else 255) for i in range(64)]
+        script += block_read(0x1400, bytes(range(64)) if saved else self.blank)
         return script + READY + [read(0x128a, 0xc5)]
 
     def test_chip_erase_preserves_eeprom_when_eesave(self):
@@ -260,13 +272,56 @@ class NvmTest(unittest.TestCase):
 
     def test_chip_erase_verify_failure(self):
         script = READY + [read(0x1285, 0xf7)]
-        script += [read(0x1400 + i, i) for i in range(64)]
+        script += block_read(0x1400, bytes(range(64)))
         script += READY + store(0x1000, [5]) + READY + page_read(0, self.data)
         self.run_nvm(script, ['--chip-erase', '--confirm-erase'], 1, b'flash verification failed')
 
     def test_lock_readback_failure_reports_uncertainty(self):
         script = READY + [read(0x128a, 0xc5)] + fuse_program(10, 0x3a) + READY + [read(0x128a, 0xc5)]
         self.run_nvm(script, ['--lock', '--confirm-lock'], 1, b'lock state uncertain')
+
+    def test_block_pointer_ack_failure_cleans_up(self):
+        self.run_nvm(READY + [packet('55 69 00 80', b'\x00')],
+                     ['--write-page', '0', str(self.input)], 1, b'pointer ACK rejected')
+
+    def test_block_pointer_timeout_cleans_up(self):
+        self.run_nvm(READY + [packet('55 69 00 80')],
+                     ['--write-page', '0', str(self.input)], 1, b'timeout waiting for serial response')
+
+    def test_block_echo_mismatch_each_phase_cleans_up(self):
+        script = READY + block_read(0x8000, self.blank)
+        for index in [1, 2, 3]:
+            with self.subTest(index=index):
+                failed = script[:index] + [(script[index][0], b'')]
+                self.run_nvm(failed, ['--write-page', '0', str(self.input)], 1,
+                             b'serial echo mismatch', corrupt_at=len(self.start) + index)
+
+    def test_short_flash_block_never_writes_or_creates_output(self):
+        script = READY + block_read(0x8000, self.blank)
+        script[-1] = packet('55 24', self.blank[:63])
+        self.run_nvm(script, ['--write-page', '0', str(self.input)], 1,
+                     b'timeout waiting for serial response')
+        out = self.root / 'short.bin'
+        self.run_nvm(script, ['--read-page', '0', str(out)], 1,
+                     b'timeout waiting for serial response')
+        self.assertFalse(out.exists())
+
+    def test_erase_checks_final_flash_byte(self):
+        script = READY + [read(0x1285, 0xf7)] + block_read(0x1400, bytes(range(64)))
+        script += READY + store(0x1000, [5]) + READY
+        for p in range(31):
+            script += page_read(p, self.blank)
+        script += page_read(31, self.blank[:63] + b'\x00')
+        self.run_nvm(script, ['--chip-erase', '--confirm-erase'], 1, b'flash verification failed')
+
+    def test_erase_checks_final_eeprom_byte_preserved_and_erased(self):
+        for saved in [False, True]:
+            with self.subTest(saved=saved):
+                script = self.erase_script(saved)
+                # Last EEPROM LD response precedes READY and LOCKBIT reads.
+                script[-3] = packet('55 24', (bytes(range(63)) if saved else self.blank[:63]) + b'\x00')
+                self.run_nvm(script[:-2], ['--chip-erase', '--confirm-erase', '--allow-eeprom-erase'],
+                             1, b'EEPROM verification failed')
 
     def test_hex_extended_zero_base(self):
         f = self.root / 'ext.hex'

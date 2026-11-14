@@ -25,9 +25,9 @@ KEY = [packet('55 8b', b'\x00'), packet('55 c8 59'), packet('55 e0'),
 
 
 class SerialUpdiTest(unittest.TestCase):
-    def run_device(self, script, code, contains, fragment=False, corrupt_at=None, args=()):
+    def run_device(self, script, code, contains, fragment=False, corrupt_at=None, args=(), app=APP):
         master, slave = pty.openpty()
-        proc = subprocess.Popen([str(APP), os.ttyname(slave), *args],
+        proc = subprocess.Popen([str(app), os.ttyname(slave), *args],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
             for index, (expected, response) in enumerate(script):

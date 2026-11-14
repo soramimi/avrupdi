@@ -5,7 +5,7 @@
 #include <thread>
 
 namespace tiny202 {
-// Link supplies acknowledged byte/word stores and byte loads. All addresses are bytes.
+// Link supplies acknowledged byte/word stores and byte/block loads. All addresses are bytes.
 template<class Link> class Nvm {
 public:
 	explicit Nvm(Link &link) : link_(link) {}
@@ -25,7 +25,8 @@ public:
 		if (page >= PageCount) throw std::runtime_error("invalid flash page");
 		ready();
 		Page data;
-		for (unsigned i = 0; i < PageSize; ++i) data[i] = link_.readByte(0x8000 + page * PageSize + i);
+		const auto bytes = link_.readBlock(0x8000 + page * PageSize, PageSize);
+		std::copy(bytes.begin(), bytes.end(), data.begin());
 		return data;
 	}
 	void write(const Image &image)
@@ -67,16 +68,16 @@ public:
 		const auto cfg = readFuse(5);
 		if (!(cfg & 1) && !allowEeprom)
 			throw std::runtime_error("EESAVE=0: chip erase also erases EEPROM; require --allow-eeprom-erase");
-		std::array<uint8_t, 64> eeprom;
-		for (unsigned i = 0; i < eeprom.size(); ++i) eeprom[i] = link_.readByte(0x1400 + i);
+		const auto eeprom = link_.readBlock(0x1400, 64);
 		ready(); command(5); ready();
 		for (unsigned p = 0; p < PageCount; ++p) {
 			auto data = readPage(p);
 			if (!std::all_of(data.begin(), data.end(), [](uint8_t b) { return b == 255; }))
 				throw std::runtime_error("chip erase flash verification failed");
 		}
+		const auto after = link_.readBlock(0x1400, eeprom.size());
 		for (unsigned i = 0; i < eeprom.size(); ++i)
-			if (link_.readByte(0x1400 + i) != ((cfg & 1) ? eeprom[i] : 0xff))
+			if (after[i] != ((cfg & 1) ? eeprom[i] : 0xff))
 				throw std::runtime_error("chip erase EEPROM verification failed");
 		if (readFuse(10) != 0xc5) throw std::runtime_error("chip erase lock verification failed");
 	}
