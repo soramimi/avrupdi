@@ -278,14 +278,17 @@ class NvmTest(unittest.TestCase):
             with self.subTest(args=args): self.reject_cli(args)
 
     def reject_cli(self, args, message=None):
-        result = subprocess.run([str(APP), '/no-such-serial-port', *args], capture_output=True)
+        result = subprocess.run([str(APP), '-p', '/no-such-serial-port', *args], capture_output=True)
         self.assertEqual(result.returncode, 1, result)
         self.assertNotIn(b'open serial port', result.stderr)
         if message:
             self.assertIn(message, result.stderr)
 
     def test_invalid_cli_before_open(self):
-        for args in [ ['--verify-erase-flash'],
+        for args in [ ['--part', 'ATtiny202'], ['/dev/ttyUSB0'],
+                      ['--port', ''], ['--port', '--read-lock'], ['-p'], ['--port'],
+                      ['-t'], ['--target'], ['-t', 'ATtiny202', '--target', 'ATtiny202'],
+                      ['--verify-erase-flash'],
                       ['--read-lock', '--verify-erase-flash'],
                       ['--chip-erase', '--confirm-erase'], ['--confirm-erase'], ['--lock'], ['--confirm-lock'],
                       ['--read-lock', '--allow-eeprom-erase'], ['--read-lock', '--read-fuses'],
@@ -318,7 +321,7 @@ class NvmTest(unittest.TestCase):
 
     def test_busy_timeout_is_bounded_and_cleans_up(self):
         master, slave = pty.openpty()
-        proc = subprocess.Popen([str(APP), os.ttyname(slave), '--read-lock'],
+        proc = subprocess.Popen([str(APP), '-p', os.ttyname(slave), '--read-lock'],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
             for expected, response in self.start:

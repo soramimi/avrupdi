@@ -7,23 +7,23 @@ ATtiny202 の実機で、`0x1E9123` の読み出しを確認済みです。シ�
 
 ## 対応デバイス
 
-| 識別名（`-p`） | シグネチャ | NVM / アドレス幅 | Flash / ページ | シグネチャのアドレス |
+| 識別名（`-t`） | シグネチャ | NVM / アドレス幅 | Flash / ページ | シグネチャのアドレス |
 | --- | --- | --- | --- | --- |
 | `ATtiny202`（既定） | `1E 91 23` | P:0 / 16ビット | 2048 / 64バイト（32ページ） | `0x1100` |
 | `AVR64DU32` | `1E 96 21` | P:4 / 24ビット | 65536 / 512バイト（128ページ） | `0x1080` |
 
-識別名・表示名・定義シンボルに梱包記号の `T` は付けません。`-p` / `--part` の値は大文字・小文字を区別せず、`AVR64DU32T` は受け付けません。自動判別ではなく明示選択です。指定を省略した場合は従来どおり ATtiny202 を対象にします。SIB のファミリーと NVM バージョン、さらにシグネチャを照合し、不一致のデバイスに書き込みや消去を行いません。
+識別名・表示名・定義シンボルに梱包記号の `T` は付けません。`-t` / `--target` の値は大文字・小文字を区別せず、`AVR64DU32T` は受け付けません。自動判別ではなく明示選択です。指定を省略した場合は従来どおり ATtiny202 を対象にします。SIB のファミリーと NVM バージョン、さらにシグネチャを照合し、不一致のデバイスに書き込みや消去を行いません。
 
 AVR64DU32 の実行例：
 
 ```bash
 make
-./myapp -p AVR64DU32 /dev/ttyUSB0
-./myapp --part AVR64DU32 -v /dev/ttyUSB0
-./myapp -p AVR64DU32 --read-page 127 last-page.bin
-./myapp -p AVR64DU32 --read-hex backup-du.hex
-./myapp -p AVR64DU32 --read-fuses
-./myapp -p AVR64DU32 --read-lock
+./myapp -t AVR64DU32 -p /dev/ttyUSB0
+./myapp --target AVR64DU32 -v --port /dev/ttyUSB0
+./myapp -t AVR64DU32 --read-page 127 last-page.bin
+./myapp -t AVR64DU32 --read-hex backup-du.hex
+./myapp -t AVR64DU32 --read-fuses
+./myapp -t AVR64DU32 --read-lock
 ```
 
 識別成功時は次のように表示します。
@@ -39,12 +39,12 @@ AVR64DU32 のページバイナリは厳密に512バイト、ページ番号は0
 
 ```bash
 # 消去せず、空または完全一致のページに書き込む
-./myapp -p AVR64DU32 --write-page 0 page-du.bin
-./myapp -p AVR64DU32 --write-hex firmware-du.hex --no-chip-erase
+./myapp -t AVR64DU32 --write-page 0 page-du.bin
+./myapp -t AVR64DU32 --write-hex firmware-du.hex --no-chip-erase
 # EEPROM と Boot Row の消去を許可して全消去し、HEX を書き込む
-./myapp -p AVR64DU32 --write-hex firmware-du.hex --allow-eeprom-erase --allow-bootrow-erase
+./myapp -t AVR64DU32 --write-hex firmware-du.hex --allow-eeprom-erase --allow-bootrow-erase
 # 全消去後に Flash 全領域も検証する
-./myapp -p AVR64DU32 --chip-erase --allow-eeprom-erase --allow-bootrow-erase --verify-erase-flash
+./myapp -t AVR64DU32 --chip-erase --allow-eeprom-erase --allow-bootrow-erase --verify-erase-flash
 ```
 
 `--write-hex` は両デバイスとも既定で全消去します。AVR64DU32 では EEPROM 256バイトに加え、Boot Row 256バイトもチップ消去の影響を受けます。`SYSCFG0.EESAVE=0` には `--allow-eeprom-erase`、`BROWSAVE=0` には `--allow-bootrow-erase` が必要です。後者は AVR64DU32 の消去操作専用で、ATtiny202 や `--no-chip-erase` との併用は拒否します。許可が足りなければ消去前に停止します。
@@ -58,8 +58,8 @@ NVM v4 では ATtiny202 のページバッファ操作を使いません。FLWR�
 書き込み可能な Fuse 名は `WDTCFG`、`BODCFG`、`OSCCFG`、`SYSCFG0`、`SYSCFG1`、`CODESIZE`、`BOOTSIZE` です。`APPEND` / `BOOTEND` は ATtiny202 用で、AVR64DU32 には使いません。`CODESIZE` / `BOOTSIZE` は512バイト単位で検証します。AVR64DU32 の予約ビットはデータシートに従って0を要求します。
 
 ```bash
-./myapp -p AVR64DU32 --write-fuse SYSCFG1 09 --confirm-fuse
-./myapp -p AVR64DU32 --lock --confirm-lock
+./myapp -t AVR64DU32 --write-fuse SYSCFG1 09 --confirm-fuse
+./myapp -t AVR64DU32 --lock --confirm-lock
 ```
 
 `SYSCFG0.UPDIPINCFG` は1を要求し、UPDI 無効化を拒否します。`PDICFGL` / `PDICFGH` は `--read-fuses` で表示しますが、書き込みは拒否します。PDICFG の NVM 保護とロックを組み合わせると UPDI からの消去もできなくなるため、ロック操作は PDICFG が既定値 `0x0003` の場合だけ許可します。
@@ -85,11 +85,11 @@ make
 ./myapp
 ```
 
-デフォルトのポートは `/dev/ttyUSB0` です。ポート指定と通信ログの表示は次のように行います。
+デフォルトのポートは `/dev/ttyUSB0` です。`-p <port>` / `--port <port>` で指定し、位置引数での指定は受け付けません。ポート指定と通信ログの表示は次のように行います。
 
 ```bash
-./myapp /dev/ttyUSB1
-./myapp -v /dev/ttyUSB0
+./myapp -p /dev/ttyUSB1
+./myapp -v -p /dev/ttyUSB0
 ./myapp --help
 ```
 
@@ -142,18 +142,18 @@ UPDI の `ST ptr`（`55 69 addr_lo addr_hi`）で16ビットのバイトアド�
 
 ## Flash ページと Intel HEX
 
-従来の引数なし実行、位置引数のポート指定、`-v`、ヘルプ、シグネチャ出力と終了コードは維持します。追加コマンドは1回の起動につき1つだけ指定できます。ファイル入力と引数の検証はポートを開く前に行います。読み出し先は**新規ファイル**に限定し、既存のバックアップやシンボリックリンクを上書きしません。
+引数なし実行、`-v`、ヘルプ、シグネチャ出力と終了コードは維持します。追加コマンドは1回の起動につき1つだけ指定できます。ファイル入力と引数の検証はポートを開く前に行います。読み出し先は**新規ファイル**に限定し、既存のバックアップやシンボリックリンクを上書きしません。
 
 ```bash
-./myapp /dev/ttyUSB0 --read-page 0 page0.bin
-./myapp /dev/ttyUSB0 --write-page 0 page0.bin
-./myapp /dev/ttyUSB0 --read-hex backup.hex
+./myapp -p /dev/ttyUSB0 --read-page 0 page0.bin
+./myapp -p /dev/ttyUSB0 --write-page 0 page0.bin
+./myapp -p /dev/ttyUSB0 --read-hex backup.hex
 # 既定は chip erase 後に書き込み（EESAVE=1 の場合）
-./myapp /dev/ttyUSB0 --write-hex firmware.hex
+./myapp -p /dev/ttyUSB0 --write-hex firmware.hex
 # EESAVE=0 で EEPROM も消してよい場合
-./myapp /dev/ttyUSB0 --write-hex firmware.hex --allow-eeprom-erase
+./myapp -p /dev/ttyUSB0 --write-hex firmware.hex --allow-eeprom-erase
 # 消去せず書き込む場合
-./myapp /dev/ttyUSB0 --write-hex firmware.hex --no-chip-erase
+./myapp -p /dev/ttyUSB0 --write-hex firmware.hex --no-chip-erase
 ```
 
 以下のサイズとアドレスは ATtiny202 の場合です。ページ番号は十進数または `0x` 付き16進数の 0～31、バイナリは厳密に64バイトです。Flash は2048バイト。HEX アドレスは Flash 先頭基準の **バイト単位** `0x0000`～`0x07FF` で、UPDI のシステムバスでは `0x8000` を加えます。HVPP のワードアドレスは使いません。Flash バッファはリトルエンディアンの16ビット STS でロードし、アドレス・データそれぞれの ACK を検証します。
@@ -169,11 +169,11 @@ HEX はデータ（00）、EOF（01）、拡張セグメント（02）、拡張�
 ## チップ消去
 
 ```bash
-./myapp /dev/ttyUSB0 --chip-erase
+./myapp -p /dev/ttyUSB0 --chip-erase
 # EESAVE=0 のデバイスで EEPROM も消してよい場合だけ指定
-./myapp /dev/ttyUSB0 --chip-erase --allow-eeprom-erase
+./myapp -p /dev/ttyUSB0 --chip-erase --allow-eeprom-erase
 # Flash 全2048バイトの読み戻し検証も行う場合
-./myapp /dev/ttyUSB0 --chip-erase --allow-eeprom-erase --verify-erase-flash
+./myapp -p /dev/ttyUSB0 --chip-erase --allow-eeprom-erase --verify-erase-flash
 ```
 
 **Flash 全領域を消去します。** ATtiny202 は NVMCTRL の CHIP ERASE（05）、AVR64DU32 は CHER（20）を使用します。**消去後の Flash 全領域読み戻し検証はデフォルト無効（false）**です。`--verify-erase-flash` を指定した場合だけ、選択したデバイスの全 Flash ページが `FF` であることを連続読み出しで確認します。このオプションは単独の `--chip-erase` と、既定の自動消去を行う `--write-hex` に適用できます。

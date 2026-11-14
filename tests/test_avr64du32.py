@@ -84,20 +84,23 @@ class Avr64du32Test(unittest.TestCase):
 
     def run_du(self, script=(), args=(), code=0, message=b'Operation completed', **kw):
         self.run_device(START + list(script) + CLEANUP, code, message,
-                        args=['-p', 'AVR64DU32', *args], **kw)
+                        args=['-t', 'AVR64DU32', *args], **kw)
 
     def test_signature_and_canonical_name(self):
-        self.run_du(message=b'AVR64DU32 detected', fragment=True)
+        for option in ['-t', '--target']:
+            with self.subTest(option=option):
+                self.run_device(START + CLEANUP, 0, b'AVR64DU32 detected',
+                                args=[option, 'avr64du32'], fragment=True)
 
     def test_wrong_sib_stops_before_memory_access(self):
         sib = SIB[:10] + b'2' + SIB[11:]
         self.run_device(INIT[:5] + [packet('55 e6', sib)] + CLEANUP, 1,
-                        b'unsupported SIB', args=['-p', 'AVR64DU32'])
+                        b'unsupported SIB', args=['-t', 'AVR64DU32'])
 
     def test_wrong_signature_stops_before_erase(self):
         wrong = START[:-1] + [read(0x1082, 0x22)]
         self.run_device(wrong + CLEANUP, 2, b'Signature mismatch',
-                        args=['-p', 'AVR64DU32', '--chip-erase', '--allow-eeprom-erase', '--allow-bootrow-erase'])
+                        args=['-t', 'AVR64DU32', '--chip-erase', '--allow-eeprom-erase', '--allow-bootrow-erase'])
 
     def test_last_page_24_bit_read_and_two_repeat_chunks(self):
         out = self.root / 'page.bin.out'
@@ -200,34 +203,34 @@ class Avr64du32Test(unittest.TestCase):
                     1, b'refusing lock with non-default PDICFG')
 
     def test_invalid_device_page_fuse_and_options_before_open(self):
-        for args in [['-p', 'AVR64DU32T'], ['-p', 'AVR64DU32', '-p', 'ATtiny202'],
-                     ['-p', 'AVR64DU32', '--read-page', '128', 'out'],
-                     ['-p', 'AVR64DU32', '--read-page', '', 'out'],
-                     ['-p', 'AVR64DU32', '--write-fuse', 'APPEND', '00', '--confirm-fuse'],
-                     ['-p', 'AVR64DU32', '--write-fuse', 'PDICFGL', '03', '--confirm-fuse'],
-                     ['-p', 'AVR64DU32', '--write-fuse', 'SYSCFG0', 'C0', '--confirm-fuse'],
-                     ['-p', 'AVR64DU32', '--write-fuse', 'SYSCFG1', 'F8', '--confirm-fuse'],
-                     ['-p', 'AVR64DU32', '--write-fuse', 'OSCCFG', '02', '--confirm-fuse'],
-                     ['-p', 'AVR64DU32', '--write-fuse', 'BOOTSIZE', '81', '--confirm-fuse'],
+        for args in [['-t', 'AVR64DU32T'], ['-t', 'AVR64DU32', '-t', 'ATtiny202'],
+                     ['-t', 'AVR64DU32', '--read-page', '128', 'out'],
+                     ['-t', 'AVR64DU32', '--read-page', '', 'out'],
+                     ['-t', 'AVR64DU32', '--write-fuse', 'APPEND', '00', '--confirm-fuse'],
+                     ['-t', 'AVR64DU32', '--write-fuse', 'PDICFGL', '03', '--confirm-fuse'],
+                     ['-t', 'AVR64DU32', '--write-fuse', 'SYSCFG0', 'C0', '--confirm-fuse'],
+                     ['-t', 'AVR64DU32', '--write-fuse', 'SYSCFG1', 'F8', '--confirm-fuse'],
+                     ['-t', 'AVR64DU32', '--write-fuse', 'OSCCFG', '02', '--confirm-fuse'],
+                     ['-t', 'AVR64DU32', '--write-fuse', 'BOOTSIZE', '81', '--confirm-fuse'],
                      ['--chip-erase', '--allow-bootrow-erase'],
-                     ['-p', 'AVR64DU32', '--read-lock', '--allow-bootrow-erase']]:
+                     ['-t', 'AVR64DU32', '--read-lock', '--allow-bootrow-erase']]:
             with self.subTest(args=args):
-                result = subprocess.run([str(APP), '/no-such-port', *args], capture_output=True)
+                result = subprocess.run([str(APP), '-p', '/no-such-port', *args], capture_output=True)
                 self.assertEqual(result.returncode, 1)
                 self.assertNotIn(b'open serial port', result.stderr)
 
     def test_page_size_validated_after_device_option(self):
         for size in [64, 511, 513]:
             self.input.write_bytes(bytes(size))
-            result = subprocess.run([str(APP), '/no-such-port', '--write-page', '127', str(self.input),
-                                     '--part', 'avr64du32'], capture_output=True)
+            result = subprocess.run([str(APP), '-p', '/no-such-port', '--write-page', '127', str(self.input),
+                                     '--target', 'avr64du32'], capture_output=True)
             self.assertIn(b'exactly 512 bytes', result.stderr)
             self.assertNotIn(b'open serial port', result.stderr)
 
     def test_hex_above_64k_rejected_before_open(self):
         path = self.root / 'bad.hex'
         path.write_text(record(0, [0, 1], 4) + record(0, [1]) + record(0, [], 1))
-        result = subprocess.run([str(APP), '/no-such-port', '-p', 'AVR64DU32', '--write-hex', str(path)],
+        result = subprocess.run([str(APP), '-p', '/no-such-port', '-t', 'AVR64DU32', '--write-hex', str(path)],
                                 capture_output=True)
         self.assertEqual(result.returncode, 1)
         self.assertIn(b'invalid HEX', result.stderr)

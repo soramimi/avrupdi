@@ -25,9 +25,10 @@ KEY = [packet('55 8b', b'\x00'), packet('55 c8 59'), packet('55 e0'),
 
 
 class SerialUpdiTest(unittest.TestCase):
-    def run_device(self, script, code, contains, fragment=False, corrupt_at=None, args=(), app=APP):
+    def run_device(self, script, code, contains, fragment=False, corrupt_at=None, args=(), app=APP, port_option='-p'):
         master, slave = pty.openpty()
-        proc = subprocess.Popen([str(app), os.ttyname(slave), *args],
+        port_args = [port_option, os.ttyname(slave)] if app == APP else [os.ttyname(slave)]
+        proc = subprocess.Popen([str(app), *port_args, *args],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
             for index, (expected, response) in enumerate(script):
@@ -67,8 +68,18 @@ class SerialUpdiTest(unittest.TestCase):
                  for i, value in enumerate(signature)] + CLEANUP)
 
     def test_signature_and_fragmented_reads(self):
-        self.run_device(self.read_script([0x1e, 0x91, 0x23]), 0,
-                        b'Device signature = 0x1E9123', fragment=True)
+        for option in ['-p', '--port']:
+            with self.subTest(option=option):
+                self.run_device(self.read_script([0x1e, 0x91, 0x23]), 0,
+                                b'Device signature = 0x1E9123', fragment=True, port_option=option)
+
+    def test_invalid_port_options_before_open(self):
+        for args in [['-p'], ['--port'], ['-p', ''], ['--port', '--read-lock'],
+                     ['-p', '/no-such-port', '--port', '/other-port'], ['/no-such-port']]:
+            with self.subTest(args=args):
+                result = subprocess.run([str(APP), *args], capture_output=True)
+                self.assertEqual(result.returncode, 1)
+                self.assertNotIn(b'open serial port', result.stderr)
 
     def test_signature_mismatch(self):
         self.run_device(self.read_script([0x1e, 0x92, 0x23]), 2,
@@ -96,7 +107,7 @@ class SerialUpdiTest(unittest.TestCase):
         # More replies than fit within the 500 ms polling window are unnecessary:
         # run_device checks a script, so supply replies dynamically in this case.
         master, slave = pty.openpty()
-        proc = subprocess.Popen([str(APP), os.ttyname(slave)],
+        proc = subprocess.Popen([str(APP), '--port', os.ttyname(slave)],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
             script = INIT + KEY

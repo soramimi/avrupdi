@@ -354,8 +354,8 @@ void saveOutput(const std::string &path, const std::string &data)
 int main(int argc, char **argv)
 {
 	try {
-		std::string device = "/dev/ttyUSB0", action = "signature", path, fuse, part = "ATtiny202", pageArgument;
-		bool partSet = false;
+		std::string device = "/dev/ttyUSB0", action = "signature", path, fuse, targetName = "ATtiny202", pageArgument;
+		bool targetSet = false;
 		bool verbose = false, deviceSet = false, selected = false;
 		bool verifyEraseFlash = false, noChipErase = false;
 		bool allowEeprom = false, allowBootrow = false, confirmFuse = false, confirmLock = false;
@@ -367,9 +367,10 @@ int main(int argc, char **argv)
 				return argv[i];
 			};
 			if (arg == "-h" || arg == "--help") {
-				std::printf("Usage: %s [-v] [PORT] [COMMAND] [OPTIONS]\n"
+				std::printf("Usage: %s [-v] [-p PORT] [COMMAND] [OPTIONS]\n"
 					"Default: read ATtiny202 signature. One command per invocation.\n"
-					"  -p, --part NAME          ATtiny202 (default) or AVR64DU32\n"
+					"  -p, --port PORT           serial port (default: /dev/ttyUSB0)\n"
+					"  -t, --target NAME         ATtiny202 (default) or AVR64DU32\n"
 					"  --read-page PAGE FILE     binary page (ATtiny202: 64 bytes/0..31; AVR64DU32: 512 bytes/0..127)\n"
 					"  --write-page PAGE FILE    blank or identical page only\n"
 					"  --read-hex FILE           entire selected device Flash\n"
@@ -391,9 +392,9 @@ int main(int argc, char **argv)
 					"Outputs must be new files. Writes are read-back verified. HEX auto-erase removes unselected pages too.\n", argv[0]);
 				return 0;
 			}
-			if (arg == "-p" || arg == "--part") {
-				if (partSet) throw std::runtime_error("device specified more than once");
-				part = next(); partSet = true; continue;
+			if (arg == "-t" || arg == "--target") {
+				if (targetSet) throw std::runtime_error("device specified more than once");
+				targetName = next(); targetSet = true; continue;
 			}
 			if (arg == "--allow-bootrow-erase") { allowBootrow = true; continue; }
 			if (arg == "-v") { verbose = true; continue; }
@@ -402,7 +403,12 @@ int main(int argc, char **argv)
 			if (arg == "--allow-eeprom-erase") { allowEeprom = true; continue; }
 			if (arg == "--confirm-fuse") { confirmFuse = true; continue; }
 			if (arg == "--confirm-lock") { confirmLock = true; continue; }
-			if (!arg.empty() && arg[0] != '-' && !deviceSet) { device = arg; deviceSet = true; continue; }
+			if (arg == "-p" || arg == "--port") {
+				if (deviceSet) throw std::runtime_error("port specified more than once");
+				device = next();
+				if (device.empty() || device[0] == '-') throw std::runtime_error("invalid port: " + device);
+				deviceSet = true; continue;
+			}
 			if (selected) throw std::runtime_error("only one command is allowed");
 			selected = true; action = arg;
 			if (arg == "--read-page" || arg == "--write-page") {
@@ -412,7 +418,7 @@ int main(int argc, char **argv)
 			else if (arg != "--chip-erase" && arg != "--read-fuses" && arg != "--read-lock" && arg != "--lock")
 				throw std::runtime_error("Invalid argument: " + arg);
 		}
-		const auto &target = avrprog::findDevice(part);
+		const auto &target = avrprog::findDevice(targetName);
 		if (action == "--read-page" || action == "--write-page") page = avrprog::number(pageArgument, target.pageCount() - 1);
 		const bool eraseRequested = action == "--chip-erase" || (action == "--write-hex" && !noChipErase);
 		if ((noChipErase && action != "--write-hex") || ((allowEeprom || allowBootrow || verifyEraseFlash) && !eraseRequested) || (allowBootrow && !target.isDu()))

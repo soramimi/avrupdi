@@ -2,8 +2,8 @@
 NAME := myapp
 PROJDIR := .
 PORT ?= /dev/ttyUSB0
-PART ?= ATtiny202
-HEX ?= $(if $(filter ATtiny202,$(PART)),example/attiny202blink.hex,)
+PART ?= AVR64DU32
+HEX ?= example/avr64du32blink.hex
 ERASE_OPTIONS ?= --allow-eeprom-erase
 
 SRCS := main.cpp
@@ -67,11 +67,11 @@ dude:
 
 .PHONY: query chiperase writehex
 query: $(NAME)
-	./$(NAME) $(PORT) -p $(PART) -v
+	./$(NAME) -p "$(PORT)" -t $(PART) --read-fuses
 
 chiperase: $(NAME)
-	./$(NAME) $(PORT) -p $(PART) --chip-erase $(ERASE_OPTIONS)
+	./$(NAME) -p "$(PORT)" -t $(PART) --chip-erase $(ERASE_OPTIONS)
 
 writehex: $(NAME)
 	@test -n "$(HEX)" || { echo "Specify HEX=firmware.hex for $(PART)" >&2; exit 1; }
-	./$(NAME) $(PORT) -p $(PART) $(ERASE_OPTIONS) --write-hex "$(HEX)"
+	./$(NAME) -p "$(PORT)" -t $(PART) $(ERASE_OPTIONS) --write-hex "$(HEX)" --allow-bootrow-erase
