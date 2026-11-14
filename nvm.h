@@ -63,17 +63,19 @@ public:
 		programFuse(10, 0x3a);
 		if (readFuse(10) != 0x3a) throw std::runtime_error("lock verify mismatch; lock state uncertain");
 	}
-	void erase(bool allowEeprom)
+	void erase(bool allowEeprom, bool verifyFlash = false)
 	{
 		const auto cfg = readFuse(5);
 		if (!(cfg & 1) && !allowEeprom)
 			throw std::runtime_error("EESAVE=0: chip erase also erases EEPROM; require --allow-eeprom-erase");
 		const auto eeprom = link_.readBlock(0x1400, 64);
 		ready(); command(5); ready();
-		for (unsigned p = 0; p < PageCount; ++p) {
-			auto data = readPage(p);
-			if (!std::all_of(data.begin(), data.end(), [](uint8_t b) { return b == 255; }))
-				throw std::runtime_error("chip erase flash verification failed");
+		if (verifyFlash) {
+			for (unsigned p = 0; p < PageCount; ++p) {
+				auto data = readPage(p);
+				if (!std::all_of(data.begin(), data.end(), [](uint8_t b) { return b == 255; }))
+					throw std::runtime_error("chip erase flash verification failed");
+			}
 		}
 		const auto after = link_.readBlock(0x1400, eeprom.size());
 		for (unsigned i = 0; i < eeprom.size(); ++i)

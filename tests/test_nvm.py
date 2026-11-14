@@ -173,20 +173,48 @@ class NvmTest(unittest.TestCase):
         self.run_nvm(READY + [read(0x1285, 0xf6)], ['--chip-erase', '--confirm-erase'],
                      1, b'--allow-eeprom-erase')
 
-    def erase_script(self, saved):
+    def erase_script(self, saved, verify_flash=False):
         script = READY + [read(0x1285, 0xf6 | saved)]
         script += block_read(0x1400, bytes(range(64)))
         script += READY + store(0x1000, [5]) + READY
-        for p in range(32):
-            script += page_read(p, self.blank)
+        if verify_flash:
+            for p in range(32):
+                script += page_read(p, self.blank)
         script += block_read(0x1400, bytes(range(64)) if saved else self.blank)
         return script + READY + [read(0x128a, 0xc5)]
 
-    def test_chip_erase_preserves_eeprom_when_eesave(self):
+    def test_default_erase_skips_flash_and_preserves_eeprom_when_eesave(self):
         self.run_nvm(self.erase_script(True), ['--chip-erase', '--confirm-erase'])
 
-    def test_chip_erase_explicit_eeprom_destruction(self):
+    def test_default_erase_skips_flash_and_verifies_eeprom_destruction(self):
         self.run_nvm(self.erase_script(False), ['--chip-erase', '--confirm-erase', '--allow-eeprom-erase'])
+
+    def test_chip_erase_verification_opt_in_reads_every_flash_page(self):
+        for saved in [False, True]:
+            with self.subTest(saved=saved):
+                self.run_nvm(self.erase_script(saved, verify_flash=True),
+                             ['--chip-erase', '--confirm-erase', '--verify-erase-flash', '--allow-eeprom-erase'])
+
+    def test_default_erase_still_checks_nvm_error(self):
+        script = READY + [read(0x1285, 0xf7)] + block_read(0x1400, bytes(range(64)))
+        script += READY + store(0x1000, [5]) + [read(0x1002, 4)]
+        self.run_nvm(script, ['--chip-erase', '--confirm-erase'], 1, b'NVM write error')
+
+    def test_default_erase_still_checks_lock(self):
+        script = self.erase_script(True)
+        script[-1] = read(0x128a, 0x3a)
+        self.run_nvm(script, ['--chip-erase', '--confirm-erase'], 1, b'lock verification failed')
+
+    def test_erase_verify_option_does_not_authorize_eeprom_erase(self):
+        self.run_nvm(READY + [read(0x1285, 0xf6)],
+                     ['--chip-erase', '--confirm-erase', '--verify-erase-flash'],
+                     1, b'--allow-eeprom-erase')
+
+    def test_help_describes_optional_flash_verification(self):
+        result = subprocess.run([str(APP), '--help'], capture_output=True, check=True)
+        self.assertIn(b'--verify-erase-flash', result.stdout)
+        self.assertIn(b'defaults to off', result.stdout)
+        self.assertIn(b'EEPROM/lock checks remain on', result.stdout)
 
     def reject_cli(self, args, message=None):
         result = subprocess.run([str(APP), '/no-such-serial-port', *args], capture_output=True)
@@ -196,7 +224,9 @@ class NvmTest(unittest.TestCase):
             self.assertIn(message, result.stderr)
 
     def test_invalid_cli_before_open(self):
-        for args in [ ['--chip-erase'], ['--lock'], ['--confirm-lock'],
+        for args in [ ['--verify-erase-flash'],
+                      ['--read-lock', '--verify-erase-flash'],
+                      ['--chip-erase', '--verify-erase-flash'], ['--chip-erase'], ['--lock'], ['--confirm-lock'],
                       ['--read-lock', '--allow-eeprom-erase'], ['--read-lock', '--read-fuses'],
                       ['--read-page', '32', 'out'], ['--read-page', '-1', 'out'],
                       ['--write-fuse', 'low', 'FF', '--confirm-fuse'],
@@ -274,7 +304,7 @@ class NvmTest(unittest.TestCase):
         script = READY + [read(0x1285, 0xf7)]
         script += block_read(0x1400, bytes(range(64)))
         script += READY + store(0x1000, [5]) + READY + page_read(0, self.data)
-        self.run_nvm(script, ['--chip-erase', '--confirm-erase'], 1, b'flash verification failed')
+        self.run_nvm(script, ['--chip-erase', '--confirm-erase', '--verify-erase-flash'], 1, b'flash verification failed')
 
     def test_lock_readback_failure_reports_uncertainty(self):
         script = READY + [read(0x128a, 0xc5)] + fuse_program(10, 0x3a) + READY + [read(0x128a, 0xc5)]
@@ -312,7 +342,7 @@ class NvmTest(unittest.TestCase):
         for p in range(31):
             script += page_read(p, self.blank)
         script += page_read(31, self.blank[:63] + b'\x00')
-        self.run_nvm(script, ['--chip-erase', '--confirm-erase'], 1, b'flash verification failed')
+        self.run_nvm(script, ['--chip-erase', '--confirm-erase', '--verify-erase-flash'], 1, b'flash verification failed')
 
     def test_erase_checks_final_eeprom_byte_preserved_and_erased(self):
         for saved in [False, True]:

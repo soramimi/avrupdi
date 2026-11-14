@@ -62,7 +62,7 @@ ATtiny202 detected
 
 ### 連続読み出し
 
-Flash の各64バイトページ（通常読み出し、HEX 出力、書き込み前確認、読み戻し検証、消去検証）と、消去前後の EEPROM 64バイトを連続読み出しします。Flash 全2048バイトと EEPROM の保持／消去の検証は継続します。消去方針、confirm オプション、シグネチャ・Fuse・ステータスの単バイト読み出しは変更していません。
+Flash の各64バイトページ（通常読み出し、HEX 出力、書き込み前確認、読み戻し検証、消去検証）と、消去前後の EEPROM 64バイトを連続読み出しします。chip erase 後の Flash 全2048バイト検証は `--verify-erase-flash` 指定時だけ行い、EEPROM の保持／消去の検証は常に行います。消去方針、confirm オプション、シグネチャ・Fuse・ステータスの単バイト読み出しは変更していません。
 
 UPDI の `ST ptr`（`55 69 addr_lo addr_hi`）で16ビットのバイトアドレスを設定し、エコーと `40` ACK を確認します。続いて `REPEAT`（`55 A0 count-1`）、`LD ptr++`（`55 24`）で指定バイト数を受信します。REPEAT と LD にターゲット ACK はありませんが、両方の送信エコーを従来どおり検証します。受信直前の flush は行いません。
 
@@ -100,9 +100,15 @@ HEX はデータ（00）、EOF（01）、拡張セグメント（02）、拡張�
 ./myapp /dev/ttyUSB0 --chip-erase --confirm-erase
 # EESAVE=0 のデバイスで EEPROM も消してよい場合だけ指定
 ./myapp /dev/ttyUSB0 --chip-erase --confirm-erase --allow-eeprom-erase
+# Flash 全2048バイトの読み戻し検証も行う場合
+./myapp /dev/ttyUSB0 --chip-erase --confirm-erase --allow-eeprom-erase --verify-erase-flash
 ```
 
-**Flash 全領域を消去します。** NVMCTRL の CHIP ERASE（05）を使用し、全 Flash の `FF`、EEPROM の保持／消去、ロック値 `C5` を検証します。EESAVE=0 なら EEPROM も消えるため、追加指定がなければコマンド発行前に拒否します。EESAVE=1 なら EEPROM の消去前内容と消去後内容を比較します。保護を外す目的で Fuse を自動変更しません。
+**Flash 全領域を消去します。** NVMCTRL の CHIP ERASE（05）を使用します。**消去後の Flash 全領域読み戻し検証はデフォルト無効（false）**です。`--verify-erase-flash` を指定した場合だけ、全32ページ・2048バイトが `FF` であることを連続読み出しで確認します。このオプションは `--chip-erase` 専用で、他コマンドと組み合わせるとポートを開く前に拒否します。
+
+オプション化する「全領域」は **chip erase 後の Flash 全領域**だけを意味します。EEPROM 64バイトの保持／消去検証、ロック値 `C5` の確認、NVM 完了待ち・WRERROR 検査は常に行います。通常の Flash 書き込み前確認・書き込み後検証も変更しません。デフォルトの成功終了は Flash の全バイトを読み戻して消去確認したことを意味しません。
+
+EESAVE=0 なら EEPROM も消えるため、追加指定がなければコマンド発行前に拒否します。EESAVE=1 なら EEPROM の消去前内容と消去後内容を比較します。保護を外す目的で Fuse を自動変更しません。
 
 ロック済みデバイスではシグネチャや EESAVE を読めず、ATtiny202 と確認できません。そのため今回の実装は**ロック済みデバイスの消去／解除には非対応**です。CHIPERASE キーを送信する機能もありません。ロック後の復旧には、対象を確認して明示消去できる別のプログラマーが必要です。
 
