@@ -1,5 +1,6 @@
 #ifndef AVRUPDI_IMAGE_H
 #define AVRUPDI_IMAGE_H
+#include "device.h"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -10,9 +11,8 @@
 #include <string>
 #include <vector>
 
-namespace tiny202 {
-constexpr unsigned FlashSize = 2048, PageSize = 64, PageCount = FlashSize / PageSize;
-using Page = std::array<uint8_t, PageSize>;
+namespace avrprog {
+using Page = std::vector<uint8_t>;
 using Image = std::map<unsigned, Page>;
 
 inline unsigned number(const std::string &s, unsigned max, int base = 10)
@@ -32,12 +32,12 @@ inline unsigned number(const std::string &s, unsigned max, int base = 10)
 	return static_cast<unsigned>(n);
 }
 
-inline Image readHex(const std::string &path)
+inline Image readHex(const std::string &path, const Device &device)
 {
 	std::ifstream in(path);
 	if (!in) throw std::runtime_error("cannot open HEX input: " + path);
 	Image image;
-	std::array<bool, FlashSize> seen {};
+	std::vector<bool> seen(device.flashSize, false);
 	uint32_t base = 0;
 	bool eof = false;
 	std::string line;
@@ -63,14 +63,14 @@ inline Image readHex(const std::string &path)
 		if (r.size() != static_cast<size_t>(r[0]) + 5 || (sum & 255)) fail();
 		const unsigned address = r[1] * 256 + r[2], count = r[0];
 		if (r[3] == 0) {
-			if (address + count > 65536 || uint64_t(base) + address + count > FlashSize) fail();
+			if (address + count > 65536 || uint64_t(base) + address + count > device.flashSize) fail();
 			for (unsigned i = 0; i < count; ++i) {
 				unsigned a = base + address + i;
 				if (seen[a]) fail(); // Reject even identical overlapping records.
 				seen[a] = true;
-				unsigned p = a / PageSize;
-				if (!image.count(p)) { Page page; page.fill(0xff); image[p] = page; }
-				image[p][a % PageSize] = r[4 + i];
+				unsigned p = a / device.pageSize;
+				if (!image.count(p)) { image[p] = Page(device.pageSize, 0xff); }
+				image[p][a % device.pageSize] = r[4 + i];
 			}
 		} else if (r[3] == 1) {
 			if (count || address) fail();
@@ -84,13 +84,13 @@ inline Image readHex(const std::string &path)
 	return image;
 }
 
-inline std::string encodeHex(const Image &image)
+inline std::string encodeHex(const Image &image, const Device &device)
 {
 	std::string out;
 	for (const auto &[p, data] : image) {
-		if (p >= PageCount) throw std::runtime_error("invalid page");
-		for (unsigned i = 0; i < PageSize; i += 16) {
-			unsigned a = p * PageSize + i, sum = 16 + (a >> 8) + (a & 255);
+		if (p >= device.pageCount() || data.size() != device.pageSize) throw std::runtime_error("invalid page");
+		for (unsigned i = 0; i < device.pageSize; i += 16) {
+			unsigned a = p * device.pageSize + i, sum = 16 + (a >> 8) + (a & 255);
 			char b[16];
 			std::snprintf(b, sizeof b, ":10%04X00", a); out += b;
 			for (unsigned j = 0; j < 16; ++j) {
@@ -102,25 +102,27 @@ inline std::string encodeHex(const Image &image)
 	return out + ":00000001FF\n";
 }
 
-struct Fuse { const char *name; uint8_t offset; uint8_t reserved; };
-inline constexpr Fuse Fuses[] = {
-	{"WDTCFG", 0, 0}, {"BODCFG", 1, 0}, {"OSCCFG", 2, 0x7c},
-	{"SYSCFG0", 5, 0x32}, {"SYSCFG1", 6, 0xf8}, {"APPEND", 7, 0}, {"BOOTEND", 8, 0}
-};
-inline const Fuse &findFuse(const std::string &name)
+inline const Fuse &findFuse(const Device &device, const std::string &name)
 {
-	for (const auto &f : Fuses) if (name == f.name) return f;
+	for (const auto &f : device.fuses) if (name == f.name) return f;
 	throw std::runtime_error("unknown fuse name: " + name);
 }
-inline void validateFuse(const Fuse &f, uint8_t v)
+inline void validateFuse(const Device &device, const Fuse &f, uint8_t v)
 {
-	if ((v & f.reserved) != f.reserved) throw std::runtime_error("reserved fuse bits must be 1");
+	if (!f.writable) throw std::runtime_error("PDI protection configuration is read-only");
+	// Preserve the tinyAVR convention; DU reserved bits are written as zero.
+	if (device.isDu() ? (v & f.reserved) != 0 : (v & f.reserved) != f.reserved)
+		throw std::runtime_error("invalid reserved fuse bits");
 	if (f.offset == 0 && ((v & 15) > 11 || (v >> 4) > 11)) throw std::runtime_error("reserved watchdog value");
-	if (f.offset == 1 && ((v & 3) == 3 || ((v >> 5) != 0 && (v >> 5) != 2 && (v >> 5) != 7)))
+	if (f.offset == 1 && ((v & 3) == 3 || (device.isDu() ? (v >> 5) > 3 :
+		((v >> 5) != 0 && (v >> 5) != 2 && (v >> 5) != 7))))
 		throw std::runtime_error("reserved BOD value");
-	if (f.offset == 2 && (v & 3) != 1 && (v & 3) != 2) throw std::runtime_error("reserved oscillator frequency");
-	if (f.offset == 5 && (v & 12) != 4) throw std::runtime_error("refusing to disable UPDI pin");
-	if ((f.offset == 7 || f.offset == 8) && v > FlashSize / 256) throw std::runtime_error("section exceeds ATtiny202 flash");
+	if (f.offset == 2 && (device.isDu() ? (v & 7) > 1 : ((v & 3) != 1 && (v & 3) != 2)))
+		throw std::runtime_error("reserved oscillator value");
+	if (f.offset == 5 && (device.isDu() ? !(v & 0x10) : (v & 12) != 4))
+		throw std::runtime_error("refusing to disable UPDI pin");
+	if ((f.offset == 7 || f.offset == 8) && v > device.flashSize / (device.isDu() ? 512 : 256))
+		throw std::runtime_error("section exceeds device flash");
 }
 }
 #endif

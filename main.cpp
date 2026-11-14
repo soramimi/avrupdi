@@ -153,8 +153,8 @@ private:
 
 class Updi {
 public:
-	explicit Updi(SerialPort &port)
-		: port_(port)
+	explicit Updi(SerialPort &port, const avrprog::Device &device = avrprog::ATtiny202)
+		: port_(port), device_(device)
 	{
 	}
 	void initialize()
@@ -178,7 +178,7 @@ public:
 		const auto sib = port_.receive(32);
 		// The field at offset 8 is e.g. "P:0", not "N:0". Like avrdude,
 		// select the NVM interface by the version following the colon.
-		if (std::memcmp(sib.data(), "tinyAVR", 7) != 0 || sib[9] != ':' || sib[10] != '0') {
+		if (std::memcmp(sib.data(), device_.family, 7) != 0 || sib[9] != ':' || sib[10] != device_.nvmVersion) {
 			std::string received;
 			for (auto value : sib) {
 				if (value >= 0x20 && value <= 0x7E && value != '\\' && value != '"')
@@ -189,7 +189,7 @@ public:
 					received += escaped;
 				}
 			}
-			throw std::runtime_error("unsupported SIB (expected tinyAVR NVM interface 0); received: \"" + received + "\"");
+			throw std::runtime_error("unsupported SIB; received: \"" + received + "\"");
 		}
 		initializeLink();
 	}
@@ -217,30 +217,28 @@ public:
 		if (readCs(0x0B) & 0x01) throw std::runtime_error("device is locked");
 		std::array<uint8_t, 3> signature { };
 		for (size_t i = 0; i < signature.size(); ++i) {
-			const uint16_t address = 0x1100 + i;
-			port_.send({ 0x55, 0x04, static_cast<uint8_t>(address),
-				static_cast<uint8_t>(address >> 8) });
-			signature[i] = port_.receive(1)[0];
+			signature[i] = readByte(device_.signatureBase + i);
 		}
 		return signature;
 	}
-	uint8_t readByte(uint16_t address)
+	uint8_t readByte(uint32_t address)
 	{
-		port_.send({0x55, 0x04, static_cast<uint8_t>(address), static_cast<uint8_t>(address >> 8)});
+		port_.send(addressCommand(device_.addressBytes == 3 ? 0x08 : 0x04, address));
 		return port_.receive(1)[0];
 	}
-	Bytes readBlock(uint16_t address, size_t size)
+	Bytes readBlock(uint32_t address, size_t size)
 	{
-		// Validate before transmitting; never wrap the 16-bit data-space address.
-		if (size > 0x10000u - static_cast<size_t>(address))
-			throw std::runtime_error("UPDI block read crosses 16-bit address boundary");
+		// Validate before transmitting; never wrap the selected address space.
+		const uint32_t limit = device_.addressBytes == 3 ? 0x1000000u : 0x10000u;
+		if (address >= limit || size > limit - address)
+			throw std::runtime_error("UPDI block read crosses " + std::to_string(device_.addressBytes * 8) + "-bit address boundary");
 		Bytes result;
 		result.reserve(size);
 		while (result.size() < size) {
 			const size_t count = std::min<size_t>(256, size - result.size());
-			const auto current = static_cast<uint16_t>(address + result.size());
-			// ST ptr (16-bit), low byte first. Re-establish ptr for each block.
-			port_.send({0x55, 0x69, static_cast<uint8_t>(current), static_cast<uint8_t>(current >> 8)});
+			const auto current = static_cast<uint32_t>(address + result.size());
+			// ST ptr, low byte first. Re-establish ptr for each block.
+			port_.send(addressCommand(device_.addressBytes == 3 ? 0x6A : 0x69, current));
 			if (port_.receive(1)[0] != 0x40) throw std::runtime_error("UPDI pointer ACK rejected");
 			// REPEAT contains the number of additional executions (0..255).
 			// No target ACK for REPEAT or LD; send() still checks every echo.
@@ -251,11 +249,11 @@ public:
 		}
 		return result;
 	}
-	void writeByte(uint16_t address, uint8_t value)
+	void writeByte(uint32_t address, uint8_t value)
 	{
 		store(address, {value});
 	}
-	void writeWord(uint16_t address, uint16_t value)
+	void writeWord(uint32_t address, uint16_t value)
 	{
 		store(address, {static_cast<uint8_t>(value), static_cast<uint8_t>(value >> 8)});
 	}
@@ -278,10 +276,21 @@ public:
 	}
 
 private:
-	void store(uint16_t address, const Bytes &data)
+	Bytes addressCommand(uint8_t opcode, uint32_t address) const
 	{
-		port_.send({0x55, static_cast<uint8_t>(data.size() == 2 ? 0x45 : 0x44),
-			static_cast<uint8_t>(address), static_cast<uint8_t>(address >> 8)});
+		const uint32_t limit = device_.addressBytes == 3 ? 0x1000000u : 0x10000u;
+		if (address >= limit) throw std::runtime_error("UPDI address out of range");
+		Bytes command{0x55, opcode};
+		for (unsigned i = 0; i < device_.addressBytes; ++i)
+			command.push_back(static_cast<uint8_t>(address >> (8 * i)));
+		return command;
+	}
+	void store(uint32_t address, const Bytes &data)
+	{
+		const uint32_t limit = device_.addressBytes == 3 ? 0x1000000u : 0x10000u;
+		if (address >= limit || data.size() > limit - address)
+			throw std::runtime_error("UPDI store crosses address boundary");
+		port_.send(addressCommand(static_cast<uint8_t>((device_.addressBytes == 3 ? 0x48 : 0x44) | (data.size() == 2 ? 1 : 0)), address));
 		if (port_.receive(1)[0] != 0x40) throw std::runtime_error("UPDI address ACK rejected");
 		port_.send(data);
 		if (port_.receive(1)[0] != 0x40) throw std::runtime_error("UPDI data ACK rejected; write result uncertain");
@@ -319,6 +328,7 @@ private:
 		writeCs(0x08, 0x00);
 	}
 	SerialPort &port_;
+	const avrprog::Device &device_;
 	bool active_ = false;
 };
 } // namespace
@@ -344,10 +354,11 @@ void saveOutput(const std::string &path, const std::string &data)
 int main(int argc, char **argv)
 {
 	try {
-		std::string device = "/dev/ttyUSB0", action = "signature", path, fuse;
+		std::string device = "/dev/ttyUSB0", action = "signature", path, fuse, part = "ATtiny202", pageArgument;
+		bool partSet = false;
 		bool verbose = false, deviceSet = false, selected = false;
 		bool verifyEraseFlash = false, noChipErase = false;
-		bool allowEeprom = false, confirmFuse = false, confirmLock = false;
+		bool allowEeprom = false, allowBootrow = false, confirmFuse = false, confirmLock = false;
 		unsigned page = 0, value = 0;
 		for (int i = 1; i < argc; ++i) {
 			const std::string arg = argv[i];
@@ -358,24 +369,33 @@ int main(int argc, char **argv)
 			if (arg == "-h" || arg == "--help") {
 				std::printf("Usage: %s [-v] [PORT] [COMMAND] [OPTIONS]\n"
 					"Default: read ATtiny202 signature. One command per invocation.\n"
-					"  --read-page PAGE FILE     64-byte binary (PAGE 0..31)\n"
+					"  -p, --part NAME          ATtiny202 (default) or AVR64DU32\n"
+					"  --read-page PAGE FILE     binary page (ATtiny202: 64 bytes/0..31; AVR64DU32: 512 bytes/0..127)\n"
 					"  --write-page PAGE FILE    blank or identical page only\n"
-					"  --read-hex FILE           entire 2048-byte flash\n"
+					"  --read-hex FILE           entire selected device Flash\n"
 					"  --write-hex FILE          chip erase first by default, then write/verify\n"
 					"    --no-chip-erase        skip erase; all selected pages must be blank or identical\n"
 					"  --chip-erase             erase the whole chip\n"
 					"  Erase options (chip erase or write-hex without --no-chip-erase):\n"
 					"    --allow-eeprom-erase   required when EESAVE=0\n"
+					"    --allow-bootrow-erase  AVR64DU32: required when BROWSAVE=0\n"
 					"    --verify-erase-flash   verify all Flash bytes after erase\n"
 					"    Flash erase read-back verification defaults to off; EEPROM/lock checks remain on.\n"
 					"  --read-fuses | --read-lock\n"
 					"  --write-fuse NAME HEXBYTE --confirm-fuse\n"
 					"  --lock --confirm-lock     locks memory; recovery requires chip erase\n"
-					"Fuses: WDTCFG BODCFG OSCCFG SYSCFG0 SYSCFG1 APPEND BOOTEND\n"
+					"ATtiny202 fuses: WDTCFG BODCFG OSCCFG SYSCFG0 SYSCFG1 APPEND BOOTEND\n"
+					"AVR64DU32 fuses: WDTCFG BODCFG OSCCFG SYSCFG0 SYSCFG1 CODESIZE BOOTSIZE\n"
+					"AVR64DU32 PDICFGL/PDICFGH are read-only; lock requires default PDICFG.\n"
 					"UPDI pin disabling and locked-device erase are not supported.\n"
 					"Outputs must be new files. Writes are read-back verified. HEX auto-erase removes unselected pages too.\n", argv[0]);
 				return 0;
 			}
+			if (arg == "-p" || arg == "--part") {
+				if (partSet) throw std::runtime_error("device specified more than once");
+				part = next(); partSet = true; continue;
+			}
+			if (arg == "--allow-bootrow-erase") { allowBootrow = true; continue; }
 			if (arg == "-v") { verbose = true; continue; }
 			if (arg == "--verify-erase-flash") { verifyEraseFlash = true; continue; }
 			if (arg == "--no-chip-erase") { noChipErase = true; continue; }
@@ -386,51 +406,53 @@ int main(int argc, char **argv)
 			if (selected) throw std::runtime_error("only one command is allowed");
 			selected = true; action = arg;
 			if (arg == "--read-page" || arg == "--write-page") {
-				page = tiny202::number(next(), 31); path = next();
+				pageArgument = next(); path = next();
 			} else if (arg == "--read-hex" || arg == "--write-hex") path = next();
-			else if (arg == "--write-fuse") { fuse = next(); value = tiny202::number(next(), 255, 16); }
+			else if (arg == "--write-fuse") { fuse = next(); value = avrprog::number(next(), 255, 16); }
 			else if (arg != "--chip-erase" && arg != "--read-fuses" && arg != "--read-lock" && arg != "--lock")
 				throw std::runtime_error("Invalid argument: " + arg);
 		}
+		const auto &target = avrprog::findDevice(part);
+		if (action == "--read-page" || action == "--write-page") page = avrprog::number(pageArgument, target.pageCount() - 1);
 		const bool eraseRequested = action == "--chip-erase" || (action == "--write-hex" && !noChipErase);
-		if ((noChipErase && action != "--write-hex") || ((allowEeprom || verifyEraseFlash) && !eraseRequested))
+		if ((noChipErase && action != "--write-hex") || ((allowEeprom || allowBootrow || verifyEraseFlash) && !eraseRequested) || (allowBootrow && !target.isDu()))
 			throw std::runtime_error("incompatible chip erase options (use --help)");
 		if (confirmFuse != (action == "--write-fuse") || confirmLock != (action == "--lock"))
 			throw std::runtime_error("missing or unrelated confirmation option (use --help)");
-		tiny202::Image image;
-		if (action == "--write-hex") image = tiny202::readHex(path);
+		avrprog::Image image;
+		if (action == "--write-hex") image = avrprog::readHex(path, target);
 		if (action == "--write-page") {
 			std::ifstream in(path, std::ios::binary);
-			tiny202::Page data;
+			avrprog::Page data(target.pageSize);
 			if (!in.read(reinterpret_cast<char *>(data.data()), data.size()) || in.peek() != EOF || in.bad())
-				throw std::runtime_error("page input must be exactly 64 bytes");
+				throw std::runtime_error("page input must be exactly " + std::to_string(target.pageSize) + " bytes");
 			image[page] = data;
 		}
-		if (action == "--write-fuse") tiny202::validateFuse(tiny202::findFuse(fuse), value);
+		if (action == "--write-fuse") avrprog::validateFuse(target, avrprog::findFuse(target, fuse), value);
 		SerialPort port(device.c_str(), verbose);
-		Updi updi(port);
+		Updi updi(port, target);
 		std::array<uint8_t, 3> signature {};
 		std::string output;
 		try {
 			updi.initialize();
 			updi.enterProgrammingMode();
 			signature = updi.readSignature();
-			if (signature == std::array<uint8_t, 3>{0x1e, 0x91, 0x23}) {
-				tiny202::Nvm<Updi> nvm(updi);
+			if (signature == target.signature) {
+				avrprog::Nvm<Updi> nvm(updi, target);
 				// HEX input is fully parsed before opening the port. Never erase to unlock.
-				if (eraseRequested) nvm.erase(allowEeprom, verifyEraseFlash);
+				if (eraseRequested) nvm.erase(allowEeprom, verifyEraseFlash, allowBootrow);
 				if (action == "--write-page" || action == "--write-hex") nvm.write(image);
 				else if (action == "--read-page") {
 					auto data = nvm.readPage(page);
 					output.assign(reinterpret_cast<const char *>(data.data()), data.size());
 				} else if (action == "--read-hex") {
-					for (unsigned p = 0; p < tiny202::PageCount; ++p) image[p] = nvm.readPage(p);
-					output = tiny202::encodeHex(image);
-				} else if (action == "--write-fuse") nvm.writeFuse(tiny202::findFuse(fuse), value);
+					for (unsigned p = 0; p < target.pageCount(); ++p) image[p] = nvm.readPage(p);
+					output = avrprog::encodeHex(image, target);
+				} else if (action == "--write-fuse") nvm.writeFuse(avrprog::findFuse(target, fuse), value);
 				else if (action == "--lock") { nvm.lock(); updi.verifyLocked(); }
 				else if (action == "--read-fuses") {
-					for (const auto &f : tiny202::Fuses) std::printf("%s = %02X\n", f.name, nvm.readFuse(f.offset));
-				} else if (action == "--read-lock") std::printf("LOCKBIT = %02X\n", nvm.readFuse(10));
+					for (const auto &f : target.fuses) std::printf("%s = %02X\n", f.name, nvm.readFuse(f.offset));
+				} else if (action == "--read-lock") std::printf("LOCKBIT = %0*X\n", static_cast<int>(target.lockSize * 2), nvm.readLock());
 			}
 		} catch (...) {
 			try { updi.leaveProgrammingMode(); }
@@ -439,11 +461,11 @@ int main(int argc, char **argv)
 		}
 		updi.leaveProgrammingMode();
 		std::printf("Device signature = 0x%02X%02X%02X\n", signature[0], signature[1], signature[2]);
-		if (signature != std::array<uint8_t, 3>{0x1e, 0x91, 0x23}) {
-			std::fprintf(stderr, "Signature mismatch: expected 0x1E9123 (ATtiny202)\n"); return 2;
+		if (signature != target.signature) {
+			std::fprintf(stderr, "Signature mismatch: expected 0x%02X%02X%02X (%s)\n", target.signature[0], target.signature[1], target.signature[2], target.name); return 2;
 		}
 		if (!output.empty()) saveOutput(path, output);
-		std::puts("ATtiny202 detected");
+		std::printf("%s detected\n", target.name);
 		if (action != "signature") std::puts("Operation completed");
 		return 0;
 	} catch (const std::exception &error) {

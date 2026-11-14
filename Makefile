@@ -1,6 +1,10 @@
 
 NAME := myapp
 PROJDIR := .
+PORT ?= /dev/ttyUSB0
+PART ?= ATtiny202
+HEX ?= $(if $(filter ATtiny202,$(PART)),example/attiny202blink.hex,)
+ERASE_OPTIONS ?= --allow-eeprom-erase
 
 SRCS := main.cpp
 LIBS := -pthread
@@ -58,13 +62,16 @@ uninstall:
 -include $(DEPS)
 
 dude:
-	avrdude -c serialupdi -P /dev/ttyUSB0 -p attiny202 -v
+	#avrdude -c serialupdi -P /dev/ttyUSB0 -p attiny202 -v
+	avrdude -c serialupdi -P /dev/ttyUSB0 -p avr64du32 -v
 
-query:
-	./myapp /dev/ttyUSB0 -v
+.PHONY: query chiperase writehex
+query: $(NAME)
+	./$(NAME) $(PORT) -p $(PART) -v
 
-chiperase:
-	./myapp /dev/ttyUSB0 --chip-erase --allow-eeprom-erase
+chiperase: $(NAME)
+	./$(NAME) $(PORT) -p $(PART) --chip-erase $(ERASE_OPTIONS)
 
-writehex:
-	./myapp /dev/ttyUSB0 --allow-eeprom-erase --write-hex example/attiny202blink.hex
+writehex: $(NAME)
+	@test -n "$(HEX)" || { echo "Specify HEX=firmware.hex for $(PART)" >&2; exit 1; }
+	./$(NAME) $(PORT) -p $(PART) $(ERASE_OPTIONS) --write-hex "$(HEX)"

@@ -53,6 +53,21 @@ class BlockReadTest(unittest.TestCase):
         self.run_device(script, 1, b'timeout waiting for serial response',
                         args=['32768', '257'], app=self.app)
 
+    def test_24_bit_boundaries_and_pointer_restarts(self):
+        from test_avr64du32 import block
+        for address, size in [(0xffff, 257), (0x800000, 512), (0x80ff00, 256),
+                              (0xffffff, 1), (0xffffff, 0)]:
+            with self.subTest(address=address, size=size):
+                data = bytes((i * 17 + 3) & 255 for i in range(size))
+                self.run_device(block(address, data), 0, data.hex().upper().encode() + b' OK',
+                                args=[str(address), str(size), 'AVR64DU32'], app=self.app)
+
+    def test_24_bit_overflow_rejected_before_transmission(self):
+        for address, size in [(0xffffff, 2), (0xffff00, 257), (0, 0x1000001)]:
+            with self.subTest(address=address, size=size):
+                self.run_device([], 1, b'crosses 24-bit address boundary',
+                                args=[str(address), str(size), 'AVR64DU32'], app=self.app)
+
     def test_partial_response_does_not_extend_deadline(self):
         master, slave = pty.openpty()
         proc = subprocess.Popen([str(self.app), os.ttyname(slave), '32768', '64'],
