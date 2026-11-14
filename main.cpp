@@ -1,3 +1,4 @@
+#include "nvm.h"
 #include <array>
 #include <cerrno>
 #include <chrono>
@@ -194,7 +195,7 @@ public:
 	}
 	void enterProgrammingMode()
 	{
-		if (readCs(0x0B) & 0x08) return;
+		if ((readCs(0x0B) & 0x09) == 0x08) return;
 		writeCs(0x08, 0x59);
 		port_.send({ 0x55, 0xE0 });
 		port_.send({ 0x20, 0x67, 0x6F, 0x72, 0x50, 0x4D, 0x56, 0x4E });
@@ -223,6 +224,29 @@ public:
 		}
 		return signature;
 	}
+	uint8_t readByte(uint16_t address)
+	{
+		port_.send({0x55, 0x04, static_cast<uint8_t>(address), static_cast<uint8_t>(address >> 8)});
+		return port_.receive(1)[0];
+	}
+	void writeByte(uint16_t address, uint8_t value)
+	{
+		store(address, {value});
+	}
+	void writeWord(uint16_t address, uint16_t value)
+	{
+		store(address, {static_cast<uint8_t>(value), static_cast<uint8_t>(value >> 8)});
+	}
+	void verifyLocked()
+	{
+		reset();
+		const auto deadline = Clock::now() + 500ms;
+		do {
+			if (readCs(0x0B) & 1) return;
+			std::this_thread::sleep_for(2ms);
+		} while (Clock::now() < deadline);
+		throw std::runtime_error("lock activation verification failed; state uncertain");
+	}
 	void leaveProgrammingMode()
 	{
 		if (!active_) return;
@@ -232,6 +256,14 @@ public:
 	}
 
 private:
+	void store(uint16_t address, const Bytes &data)
+	{
+		port_.send({0x55, static_cast<uint8_t>(data.size() == 2 ? 0x45 : 0x44),
+			static_cast<uint8_t>(address), static_cast<uint8_t>(address >> 8)});
+		if (port_.receive(1)[0] != 0x40) throw std::runtime_error("UPDI address ACK rejected");
+		port_.send(data);
+		if (port_.receive(1)[0] != 0x40) throw std::runtime_error("UPDI data ACK rejected; write result uncertain");
+	}
 	void initializeLink()
 	{
 		writeCs(0x03, 0x08);
@@ -269,53 +301,120 @@ private:
 };
 } // namespace
 
+// Do not overwrite an existing backup, device node or symlink.
+void saveOutput(const std::string &path, const std::string &data)
+{
+	int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+	if (fd < 0) throw systemError("create output (must not already exist)");
+	try {
+		size_t n = 0;
+		while (n < data.size()) {
+			auto written = ::write(fd, data.data() + n, data.size() - n);
+			if (written < 0 && errno == EINTR) continue;
+			if (written <= 0) throw systemError("write output");
+			n += written;
+		}
+		if (::fsync(fd) < 0) throw systemError("sync output");
+	} catch (...) { ::close(fd); ::unlink(path.c_str()); throw; }
+	if (::close(fd) < 0) throw systemError("close output");
+}
+
 int main(int argc, char **argv)
 {
-	const char *device = "/dev/ttyUSB0";
-	bool verbose = false;
-	bool deviceSet = false;
-	for (int i = 1; i < argc; ++i) {
-		const std::string arg = argv[i];
-		if (arg == "-h" || arg == "--help") {
-			std::printf("Usage: %s [-v] [/dev/ttyUSB0]\nRead ATtiny202 signature using SerialUPDI (115200 baud, 8E2).\n", argv[0]);
-			return 0;
-		}
-		if (arg == "-v")
-			verbose = true;
-		else if (!arg.empty() && arg[0] != '-' && !deviceSet) {
-			device = argv[i];
-			deviceSet = true;
-		} else {
-			std::fprintf(stderr, "Invalid argument: %s (use --help)\n", argv[i]);
-			return 1;
-		}
-	}
 	try {
-		SerialPort port(device, verbose);
+		std::string device = "/dev/ttyUSB0", action = "signature", path, fuse;
+		bool verbose = false, deviceSet = false, selected = false;
+		bool confirmErase = false, allowEeprom = false, confirmFuse = false, confirmLock = false;
+		unsigned page = 0, value = 0;
+		for (int i = 1; i < argc; ++i) {
+			const std::string arg = argv[i];
+			auto next = [&]() -> std::string {
+				if (++i >= argc) throw std::runtime_error("missing value for " + arg);
+				return argv[i];
+			};
+			if (arg == "-h" || arg == "--help") {
+				std::printf("Usage: %s [-v] [PORT] [COMMAND] [CONFIRMATION]\n"
+					"Default: read ATtiny202 signature. One command per invocation.\n"
+					"  --read-page PAGE FILE     64-byte binary (PAGE 0..31)\n"
+					"  --write-page PAGE FILE    blank or identical page only\n"
+					"  --read-hex FILE           entire 2048-byte flash\n"
+					"  --write-hex FILE          preflight all selected pages, FF padding\n"
+					"  --chip-erase --confirm-erase [--allow-eeprom-erase]\n"
+					"  --read-fuses | --read-lock\n"
+					"  --write-fuse NAME HEXBYTE --confirm-fuse\n"
+					"  --lock --confirm-lock     locks memory; recovery requires chip erase\n"
+					"Fuses: WDTCFG BODCFG OSCCFG SYSCFG0 SYSCFG1 APPEND BOOTEND\n"
+					"UPDI pin disabling and locked-device erase are not supported.\n"
+					"Outputs must be new files. Writes are read-back verified; no automatic erase.\n", argv[0]);
+				return 0;
+			}
+			if (arg == "-v") { verbose = true; continue; }
+			if (arg == "--confirm-erase") { confirmErase = true; continue; }
+			if (arg == "--allow-eeprom-erase") { allowEeprom = true; continue; }
+			if (arg == "--confirm-fuse") { confirmFuse = true; continue; }
+			if (arg == "--confirm-lock") { confirmLock = true; continue; }
+			if (!arg.empty() && arg[0] != '-' && !deviceSet) { device = arg; deviceSet = true; continue; }
+			if (selected) throw std::runtime_error("only one command is allowed");
+			selected = true; action = arg;
+			if (arg == "--read-page" || arg == "--write-page") {
+				page = tiny202::number(next(), 31); path = next();
+			} else if (arg == "--read-hex" || arg == "--write-hex") path = next();
+			else if (arg == "--write-fuse") { fuse = next(); value = tiny202::number(next(), 255, 16); }
+			else if (arg != "--chip-erase" && arg != "--read-fuses" && arg != "--read-lock" && arg != "--lock")
+				throw std::runtime_error("Invalid argument: " + arg);
+		}
+		if (confirmErase != (action == "--chip-erase") || (allowEeprom && action != "--chip-erase") ||
+			confirmFuse != (action == "--write-fuse") || confirmLock != (action == "--lock"))
+			throw std::runtime_error("missing or unrelated confirmation option (use --help)");
+		tiny202::Image image;
+		if (action == "--write-hex") image = tiny202::readHex(path);
+		if (action == "--write-page") {
+			std::ifstream in(path, std::ios::binary);
+			tiny202::Page data;
+			if (!in.read(reinterpret_cast<char *>(data.data()), data.size()) || in.peek() != EOF || in.bad())
+				throw std::runtime_error("page input must be exactly 64 bytes");
+			image[page] = data;
+		}
+		if (action == "--write-fuse") tiny202::validateFuse(tiny202::findFuse(fuse), value);
+		SerialPort port(device.c_str(), verbose);
 		Updi updi(port);
-		std::array<uint8_t, 3> signature { };
+		std::array<uint8_t, 3> signature {};
+		std::string output;
 		try {
 			updi.initialize();
 			updi.enterProgrammingMode();
 			signature = updi.readSignature();
-		} catch (...) {
-			try {
-				updi.leaveProgrammingMode();
-			} catch (const std::exception &error) {
-				std::fprintf(stderr, "Cleanup failed: %s\n", error.what());
+			if (signature == std::array<uint8_t, 3>{0x1e, 0x91, 0x23}) {
+				tiny202::Nvm<Updi> nvm(updi);
+				if (action == "--write-page" || action == "--write-hex") nvm.write(image);
+				else if (action == "--read-page") {
+					auto data = nvm.readPage(page);
+					output.assign(reinterpret_cast<const char *>(data.data()), data.size());
+				} else if (action == "--read-hex") {
+					for (unsigned p = 0; p < tiny202::PageCount; ++p) image[p] = nvm.readPage(p);
+					output = tiny202::encodeHex(image);
+				} else if (action == "--chip-erase") nvm.erase(allowEeprom);
+				else if (action == "--write-fuse") nvm.writeFuse(tiny202::findFuse(fuse), value);
+				else if (action == "--lock") { nvm.lock(); updi.verifyLocked(); }
+				else if (action == "--read-fuses") {
+					for (const auto &f : tiny202::Fuses) std::printf("%s = %02X\n", f.name, nvm.readFuse(f.offset));
+				} else if (action == "--read-lock") std::printf("LOCKBIT = %02X\n", nvm.readFuse(10));
 			}
+		} catch (...) {
+			try { updi.leaveProgrammingMode(); }
+			catch (const std::exception &e) { std::fprintf(stderr, "Cleanup failed: %s\n", e.what()); }
 			throw;
 		}
 		updi.leaveProgrammingMode();
 		std::printf("Device signature = 0x%02X%02X%02X\n", signature[0], signature[1], signature[2]);
-		if (signature != std::array<uint8_t, 3> { 0x1E, 0x91, 0x23 }) {
-			std::fprintf(stderr, "Signature mismatch: expected 0x1E9123 (ATtiny202)\n");
-			return 2;
+		if (signature != std::array<uint8_t, 3>{0x1e, 0x91, 0x23}) {
+			std::fprintf(stderr, "Signature mismatch: expected 0x1E9123 (ATtiny202)\n"); return 2;
 		}
+		if (!output.empty()) saveOutput(path, output);
 		std::puts("ATtiny202 detected");
+		if (action != "signature") std::puts("Operation completed");
 		return 0;
 	} catch (const std::exception &error) {
-		std::fprintf(stderr, "Error: %s\n", error.what());
-		return 1;
+		std::fprintf(stderr, "Error: %s\n", error.what()); return 1;
 	}
 }
