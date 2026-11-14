@@ -174,11 +174,15 @@ public:
 			reset();
 			initializeLink();
 		}
-		port_.send({ 0x55, 0xE6 });
-		const auto sib = port_.receive(32);
+		port_.send({ 0x55, static_cast<uint8_t>(device_.sibSize() == 16 ? 0xE5 : 0xE6) });
+		const auto sib = port_.receive(device_.sibSize());
+		// Family_ID is a seven-character field padded with spaces (on either side).
+		std::string family(sib.begin(), sib.begin() + 7);
+		const auto first = family.find_first_not_of(' ');
+		family = first == std::string::npos ? "" : family.substr(first, family.find_last_not_of(' ') - first + 1);
 		// The field at offset 8 is e.g. "P:0", not "N:0". Like avrdude,
 		// select the NVM interface by the version following the colon.
-		if (std::memcmp(sib.data(), device_.family, 7) != 0 || sib[9] != ':' || sib[10] != device_.nvmVersion) {
+		if (family != device_.family || sib[9] != ':' || sib[10] != device_.nvmVersion) {
 			std::string received;
 			for (auto value : sib) {
 				if (value >= 0x20 && value <= 0x7E && value != '\\' && value != '"')
@@ -370,8 +374,8 @@ int main(int argc, char **argv)
 				std::printf("Usage: %s [-v] [-p PORT] [COMMAND] [OPTIONS]\n"
 					"Default: read ATtiny202 signature. One command per invocation.\n"
 					"  -p, --port PORT           serial port (default: /dev/ttyUSB0)\n"
-					"  -t, --target NAME         ATtiny202 (default) or AVR64DU32\n"
-					"  --read-page PAGE FILE     binary page (ATtiny202: 64 bytes/0..31; AVR64DU32: 512 bytes/0..127)\n"
+					"  -t, --target NAME         ATtiny202 (default), AVR64DU32, AVR64DD28 or AVR64DD32\n"
+					"  --read-page PAGE FILE     binary page (ATtiny202: 64 bytes/0..31; DU/DD: 512 bytes/0..127)\n"
 					"  --write-page PAGE FILE    blank or identical page only\n"
 					"  --read-hex FILE           entire selected device Flash\n"
 					"  --write-hex FILE          chip erase first by default, then write/verify\n"
@@ -387,6 +391,7 @@ int main(int argc, char **argv)
 					"  --lock --confirm-lock     locks memory; recovery requires chip erase\n"
 					"ATtiny202 fuses: WDTCFG BODCFG OSCCFG SYSCFG0 SYSCFG1 APPEND BOOTEND\n"
 					"AVR64DU32 fuses: WDTCFG BODCFG OSCCFG SYSCFG0 SYSCFG1 CODESIZE BOOTSIZE\n"
+					"AVR64DD28/32 fuses: WDTCFG BODCFG OSCCFG SYSCFG0 SYSCFG1 CODESIZE BOOTSIZE\n"
 					"AVR64DU32 PDICFGL/PDICFGH are read-only; lock requires default PDICFG.\n"
 					"UPDI pin disabling and locked-device erase are not supported.\n"
 					"Outputs must be new files. Writes are read-back verified. HEX auto-erase removes unselected pages too.\n", argv[0]);

@@ -13,8 +13,8 @@ public:
 	{
 		const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
 		do {
-			const auto status = link_.readByte(device_.isDu() ? 0x1006 : 0x1002);
-			if (status & (device_.isDu() ? 0x70 : 4)) throw std::runtime_error("NVM write error; operation stopped");
+			const auto status = link_.readByte(device_.nvmStatus());
+			if (status & device_.nvmErrorMask()) throw std::runtime_error("NVM write error; operation stopped");
 			if (!(status & 3)) return;
 			std::this_thread::sleep_for(std::chrono::milliseconds(2));
 		} while (std::chrono::steady_clock::now() < end);
@@ -43,7 +43,7 @@ public:
 		}
 		for (auto p : pending) {
 			const auto &data = image.at(p);
-			if (device_.isDu()) {
+			if (device_.directWrite()) {
 				withCommand(2, [&]() {
 					for (unsigned i = 0; i < device_.pageSize; i += 2) {
 						link_.writeWord(device_.flashBase + p * device_.pageSize + i,
@@ -80,9 +80,9 @@ public:
 	void lock()
 	{
 		if (readLock() != device_.unlocked) throw std::runtime_error("device is already locked");
-		if (device_.isDu()) {
+		if (device_.directWrite()) {
 			// PDID + LOCK would disable even chip erase through UPDI.
-			if (readFuse(10) != 3 || readFuse(11) != 0)
+			if (device_.isDu() && (readFuse(10) != 3 || readFuse(11) != 0))
 				throw std::runtime_error("refusing lock with non-default PDICFG; UPDI recovery may be disabled");
 			withCommand(0x13, [&]() {
 				for (unsigned i = 0; i < device_.lockSize; ++i) {
@@ -102,7 +102,7 @@ public:
 			throw std::runtime_error("BROWSAVE=0: chip erase also erases Boot Row; require --allow-bootrow-erase");
 		const auto eeprom = link_.readBlock(0x1400, device_.eepromSize);
 		const auto bootrow = device_.isDu() ? link_.readBlock(0x1100, 256) : std::vector<uint8_t>{};
-		if (device_.isDu()) withCommand(0x20, []() {});
+		if (device_.directWrite()) withCommand(0x20, []() {});
 		else { ready(); command(5); ready(); }
 		if (verifyFlash) {
 			for (unsigned p = 0; p < device_.pageCount(); ++p) {
@@ -127,7 +127,7 @@ private:
 	void command(uint8_t command) { link_.writeByte(0x1000, command); }
 	void programFuse(uint8_t offset, uint8_t value)
 	{
-		if (device_.isDu()) {
+		if (device_.directWrite()) {
 			withCommand(0x13, [&]() { link_.writeByte(device_.fuseBase + offset, value); });
 			return;
 		}

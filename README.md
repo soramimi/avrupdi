@@ -1,6 +1,6 @@
-# ATtiny202 / AVR64DU32 SerialUPDI プログラマー
+# ATtiny202 / AVR64DU32 / AVR64DD28・32 SerialUPDI プログラマー
 
-SerialUPDI 経由で ATtiny202 と AVR64DU32 のシグネチャ、Flash、Fuse、ロックを扱う Linux 向けの C++ プログラムです。
+SerialUPDI 経由で ATtiny202、AVR64DU32、AVR64DD28、AVR64DD32 のシグネチャ、Flash、Fuse、ロックを扱う Linux 向けの C++ プログラムです。
 `avrdude -c serialupdi -P /dev/ttyUSB0 -p attiny202 -v` のシグネチャ確認に相当する処理を、シリアルポートを直接操作して行います。実行時に avrdude は不要です。
 
 ATtiny202 の実機で、`0x1E9123` の読み出しを確認済みです。シグネチャは型番を識別する値で、個体固有のシリアル番号ではありません。
@@ -11,6 +11,8 @@ ATtiny202 の実機で、`0x1E9123` の読み出しを確認済みです。シ�
 | --- | --- | --- | --- | --- |
 | `ATtiny202`（既定） | `1E 91 23` | P:0 / 16ビット | 2048 / 64バイト（32ページ） | `0x1100` |
 | `AVR64DU32` | `1E 96 21` | P:4 / 24ビット | 65536 / 512バイト（128ページ） | `0x1080` |
+| `AVR64DD28` | `1E 96 1B` | P:2 / 24ビット | 65536 / 512バイト（128ページ） | `0x1100` |
+| `AVR64DD32` | `1E 96 1A` | P:2 / 24ビット | 65536 / 512バイト（128ページ） | `0x1100` |
 
 識別名・表示名・定義シンボルに梱包記号の `T` は付けません。`-t` / `--target` の値は大文字・小文字を区別せず、`AVR64DU32T` は受け付けません。自動判別ではなく明示選択です。指定を省略した場合は従来どおり ATtiny202 を対象にします。SIB のファミリーと NVM バージョン、さらにシグネチャを照合し、不一致のデバイスに書き込みや消去を行いません。
 
@@ -47,7 +49,7 @@ AVR64DU32 のページバイナリは厳密に512バイト、ページ番号は0
 ./myapp -t AVR64DU32 --chip-erase --allow-eeprom-erase --allow-bootrow-erase --verify-erase-flash
 ```
 
-`--write-hex` は両デバイスとも既定で全消去します。AVR64DU32 では EEPROM 256バイトに加え、Boot Row 256バイトもチップ消去の影響を受けます。`SYSCFG0.EESAVE=0` には `--allow-eeprom-erase`、`BROWSAVE=0` には `--allow-bootrow-erase` が必要です。後者は AVR64DU32 の消去操作専用で、ATtiny202 や `--no-chip-erase` との併用は拒否します。許可が足りなければ消去前に停止します。
+`--write-hex` は全対応デバイスで既定で全消去します。AVR64DU32 では EEPROM 256バイトに加え、Boot Row 256バイトもチップ消去の影響を受けます。`SYSCFG0.EESAVE=0` には `--allow-eeprom-erase`、`BROWSAVE=0` には `--allow-bootrow-erase` が必要です。後者は AVR64DU32 の消去操作専用で、ATtiny202 や `--no-chip-erase` との併用は拒否します。許可が足りなければ消去前に停止します。
 
 消去前後の EEPROM と Boot Row を読み、保持設定なら一致、消去設定なら全バイト `FF` を確認します。32ビットのロック解除値も確認します。Flash 全領域の消去検証だけは `--verify-erase-flash` 指定時に行います。Boot Row / User Row の独立した読み書きコマンドはありません。
 
@@ -64,9 +66,32 @@ NVM v4 では ATtiny202 のページバッファ操作を使いません。FLWR�
 
 `SYSCFG0.UPDIPINCFG` は1を要求し、UPDI 無効化を拒否します。`PDICFGL` / `PDICFGH` は `--read-fuses` で表示しますが、書き込みは拒否します。PDICFG の NVM 保護とロックを組み合わせると UPDI からの消去もできなくなるため、ロック操作は PDICFG が既定値 `0x0003` の場合だけ許可します。
 
-AVR64DU32 のロック解除値は `0x5CC5C55C`、設定するロック値は `0xA33A3AA3` です。4バイトをリトルエンディアンで書き込み、読み戻しとリセット後の LOCKSTATUS を確認します。`--read-lock` は8桁の16進数で表示します。ロック済みデバイスの消去・解除は両デバイスとも非対応です。
+AVR64DU32 のロック解除値は `0x5CC5C55C`、設定するロック値は `0xA33A3AA3` です。4バイトをリトルエンディアンで書き込み、読み戻しとリセット後の LOCKSTATUS を確認します。`--read-lock` は8桁の16進数で表示します。ロック済みデバイスの消去・解除は全対応デバイスで非対応です。
 
 AVR64DU32 は PTY テストによる検証のみで、実機未検証です。以下で ATtiny202 固有のサイズ・アドレス・NVM コマンドを記載している箇所は、この節の AVR64DU32 の値とは区別してください。
+
+### AVR64DD28 / AVR64DD32
+
+両機種とも識別、Flash ページ読み書き、HEX 入出力、チップ消去、Fuse、32ビットロックに対応します。シグネチャが異なるため、`-t` で正確な機種を指定してください。
+
+```bash
+./myapp -t AVR64DD28 -p /dev/ttyUSB0
+./myapp --target AVR64DD32 --port /dev/ttyUSB0 --read-fuses
+./myapp -t AVR64DD28 --read-page 127 last-dd.bin
+./myapp -t AVR64DD32 --read-hex backup-dd.hex
+./myapp -t AVR64DD28 --write-hex firmware-dd.hex --allow-eeprom-erase
+./myapp -t AVR64DD32 --write-hex firmware-dd.hex --no-chip-erase
+./myapp -t AVR64DD28 --chip-erase --allow-eeprom-erase --verify-erase-flash
+./myapp -t AVR64DD32 --lock --confirm-lock
+```
+
+Flash は `0x800000` から65536バイト、ページは512バイト（0～127）、EEPROM は `0x1400` から256バイトです。HEX のアドレスは Flash 先頭基準で `0x0000`～`0xFFFF`。NVM P:2 はページバッファを使わず、FLWR（`02`）で16ビットずつ書き込み、Fuse / ロックは EEERWR（`13`）、チップ消去は CHER（`20`）を使用します。STATUS は `0x1002`、ERROR マスクは `0x70` です。各コマンドは成功時も失敗時も NOCMD（`00`）で解除を試みます。
+
+`--write-hex` は既定でチップ消去を行います。`SYSCFG0.EESAVE=0` なら `--allow-eeprom-erase` が必要です。EEPROM の保持／消去と32ビットのロック解除値を常に検証し、Flash 全領域の消去検証は `--verify-erase-flash` 指定時に行います。DD 系には DU 系の Boot Row / BROWSAVE / PDICFG はなく、`--allow-bootrow-erase` は受け付けません。User Row の独立した読み書きは非対応です。
+
+Fuse 名は `WDTCFG`、`BODCFG`、`OSCCFG`、`SYSCFG0`、`SYSCFG1`、`CODESIZE`、`BOOTSIZE` です。予約ビットは0、`SYSCFG0.UPDIPINCFG` は1を要求します。OSCCFG は `00` / `01`、`SYSCFG1.MVSYSCFG` は DUAL（`01`）/ SINGLE（`10`）のみ許可し、区画サイズは512バイト単位で Flash 範囲内か確認します。DU 系の SYSCFG0 / SYSCFG1 の値をそのまま使わないでください。Fuse 書き込みには `--confirm-fuse` が必要です。
+
+ロックは `0xA33A3AA3` を4バイトで書き、読み戻しとリセット後の LOCKSTATUS を確認します。解除値は `0x5CC5C55C` です。ロック済みデバイスの消去・解除は非対応です。AVR64DD28 / AVR64DD32 は PTY 検証のみで、実機未検証です。
 
 ## 必要な環境
 
@@ -114,14 +139,14 @@ ATtiny202 detected
 
 1. シリアルポートを 115200 bps・8E2（8ビット、偶数パリティ、2ストップビット）、フロー制御なしで開きます。
 2. UPDI リンクを初期化します。初回接続に失敗した場合は、300 bps・8E1 で double BREAK を送信して再試行します。
-3. 32バイトの SIB を取得し、選択したデバイスのファミリーと NVM バージョン（ATtiny202 は `tinyAVR` / `0`、AVR64DU32 は `AVR` / `4`）を確認します。`P:0` のようなフィールドのコロン後を判定します。
+3. SIB（ATtiny202 / AVR64DU32 は32バイト、AVR64DD28 / AVR64DD32 は16バイト）を取得し、選択したデバイスのファミリーと NVM バージョン（ATtiny202 は `tinyAVR` / `0`、AVR64DU32 は `AVR` / `4`、DD 系は `AVR` / `2`）を確認します。ファミリー欄の前後の空白は除いて照合します。`P:0` のようなフィールドのコロン後を判定します。
 4. NVM プログラミングキーを送信し、プログラミングモードへの移行を確認します。
 5. 選択したデバイスのシグネチャ先頭アドレスから3バイトを読み出します。
 6. リセット要求・解除と UPDI 無効化を行い、ポート設定の復元を試みて閉じます。
 
 部分的な読み書き、送信エコーの照合、タイムアウトに対応しています。送信とエコー受信の共通期限、および応答受信の期限はそれぞれ1秒です。モード移行のポーリング期限は500ミリ秒ですが、個々の通信待ちにより全体ではそれを超える場合があります。
 
-対象は ATtiny202 / NVM v0 と AVR64DU32 / NVM v4 です。すべての追加操作で SIB とシグネチャを確認し、不一致の場合は書き込みません。EEPROM の独立した読み書きコマンドは対象外です。ロック状態ではエラーになり、自動消去しません。読み出し操作でもターゲットはリセットされます。
+対象は ATtiny202 / NVM v0、AVR64DU32 / NVM v4、AVR64DD28・AVR64DD32 / NVM v2 です。すべての追加操作で SIB とシグネチャを確認し、不一致の場合は書き込みません。EEPROM の独立した読み書きコマンドは対象外です。ロック状態ではエラーになり、自動消去しません。読み出し操作でもターゲットはリセットされます。
 
 ### 連続読み出し
 
@@ -176,9 +201,9 @@ HEX はデータ（00）、EOF（01）、拡張セグメント（02）、拡張�
 ./myapp -p /dev/ttyUSB0 --chip-erase --allow-eeprom-erase --verify-erase-flash
 ```
 
-**Flash 全領域を消去します。** ATtiny202 は NVMCTRL の CHIP ERASE（05）、AVR64DU32 は CHER（20）を使用します。**消去後の Flash 全領域読み戻し検証はデフォルト無効（false）**です。`--verify-erase-flash` を指定した場合だけ、選択したデバイスの全 Flash ページが `FF` であることを連続読み出しで確認します。このオプションは単独の `--chip-erase` と、既定の自動消去を行う `--write-hex` に適用できます。
+**Flash 全領域を消去します。** ATtiny202 は NVMCTRL の CHIP ERASE（05）、AVR64DU32 / AVR64DD28 / AVR64DD32 は CHER（20）を使用します。**消去後の Flash 全領域読み戻し検証はデフォルト無効（false）**です。`--verify-erase-flash` を指定した場合だけ、選択したデバイスの全 Flash ページが `FF` であることを連続読み出しで確認します。このオプションは単独の `--chip-erase` と、既定の自動消去を行う `--write-hex` に適用できます。
 
-オプション化する「全領域」は **chip erase 後の Flash 全領域**だけを意味します。EEPROM（ATtiny202 は64バイト、AVR64DU32 は256バイト）の保持／消去検証と各機種のロック解除値の確認、AVR64DU32 の Boot Row 検証、NVM 完了待ち・WRERROR 検査は常に行います。通常の Flash 書き込み前確認・書き込み後検証も変更しません。デフォルトの成功終了は Flash の全バイトを読み戻して消去確認したことを意味しません。
+オプション化する「全領域」は **chip erase 後の Flash 全領域**だけを意味します。EEPROM（ATtiny202 は64バイト、DU / DD 系は256バイト）の保持／消去検証と各機種のロック解除値の確認、AVR64DU32 の Boot Row 検証、NVM 完了待ち・WRERROR 検査は常に行います。通常の Flash 書き込み前確認・書き込み後検証も変更しません。デフォルトの成功終了は Flash の全バイトを読み戻して消去確認したことを意味しません。
 
 単独消去・HEX 書き込み時の自動消去とも、EESAVE=0 なら EEPROM も消えるため、`--allow-eeprom-erase` がなければ消去コマンド発行前に拒否します。EESAVE=1 なら EEPROM の消去前内容と消去後内容を比較します。保護を外す目的で Fuse を自動変更しません。
 
@@ -218,6 +243,8 @@ make test
 
 Python の疑似端末（PTY）でターゲットの応答を模擬します。実機は不要です。正常な読み出しと受信の分割、シグネチャ不一致、不正・未対応の SIB、キー拒否、エコー不一致、ロック状態、応答タイムアウト、double BREAK による復帰を確認します。
 
+AVR64DD28 / AVR64DD32 は16バイト SIB とファミリー欄の空白、機種間の署名不一致、NVM v2 の STATUS / コマンド、DD 固有の Fuse と MVIO、EEPROM 保護、32ビットロック、64 KB の HEX 入出力を検証します。
+
 AVR64DU32 の SIB / シグネチャ、24ビットアドレスと境界、最終ページの読み書き、64 KB の HEX 入出力、NVM v4 コマンドとエラー、Boot Row 保護、32ビットロックを検証します。
 
 HEX 書き込みの既定自動消去、EESAVE=0 の拒否／許可と EEPROM 消去、消去なしの全選択ページ事前確認、消去検証失敗後の書き込み停止、不正 HEX の接続前拒否、オプションの組み合わせも検証します。
@@ -231,7 +258,7 @@ PTY テストでは実際の電気的特性や UART のパリティ・ストッ�
 | `make` | `myapp` をビルド |
 | `make run` | ビルド済みの `myapp` をデフォルト設定で実行 |
 | `make test` | ビルド後、疑似端末テストを実行 |
-| `make query` | 対象を識別し通信ログを表示（`PART`・`PORT` を指定可能） |
+| `make query` | 対象を識別し Fuse を表示（`PART`・`PORT` を指定可能） |
 | `make chiperase` | 選択デバイスを全消去（`ERASE_OPTIONS` で消去許可・検証を指定） |
 | `make writehex` | `HEX` のファイルを全消去後に書き込み |
 | `make dude` | 比較用の avrdude コマンドを実行（avrdude が必要） |
@@ -239,10 +266,11 @@ PTY テストでは実際の電気的特性や UART のパリティ・ストッ�
 | `make install` | ビルド済みの `myapp` を `~/.local/bin/` に配置 |
 | `make uninstall` | `~/.local/bin/myapp` を削除 |
 
-`query`・`chiperase`・`writehex` は実行前にビルドします。`PART` の既定値は `ATtiny202`、`PORT` は `/dev/ttyUSB0`、`ERASE_OPTIONS` は `--allow-eeprom-erase` です。`HEX` の既定値は ATtiny202 の場合だけ `example/attiny202blink.hex` とし、それ以外は明示指定を要求します。
+`query`・`chiperase`・`writehex` は実行前にビルドします。`PART` の既定値は `AVR64DD28`（`myapp` 単体の既定は ATtiny202）、`PORT` は `/dev/ttyUSB0`、`ERASE_OPTIONS` は `--allow-eeprom-erase` です。`HEX` の既定値は `example/avr64du32blink.hex` です。DD 系など別機種への書き込みでは、その機種向けの `HEX` を明示指定してください。`writehex` の追加の `--allow-bootrow-erase` は AVR64DU32 選択時だけ付加します。
 
 ```bash
-make query PART=AVR64DU32
+make query PART=AVR64DD28
+make writehex PART=AVR64DD32 HEX=firmware-dd.hex
 make writehex PART=AVR64DU32 HEX=firmware-du.hex ERASE_OPTIONS="--allow-eeprom-erase --allow-bootrow-erase"
 ```
 
@@ -259,11 +287,12 @@ make writehex PART=AVR64DU32 HEX=firmware-du.hex ERASE_OPTIONS="--allow-eeprom-e
 
 - `main.cpp`：シリアル通信、UPDI 制御、コマンドライン処理
 - `device.h`：機種名、シグネチャ、メモリ形状、Fuse の機種別定義
-- `nvm.h`：NVM v0 / v4 操作、事前確認、読み戻し検証
+- `nvm.h`：NVM v0 / v2 / v4 操作、事前確認、読み戻し検証
 - `image.h`：選択機種に応じた Intel HEX、Fuse 名と値の検証
 - `main.h`：現時点では未使用のヘッダーファイル
 - `Makefile`：ビルド・実行・テスト
 - `tests/test_serialupdi.py`：既存のリンク／シグネチャ通信テスト
+- `tests/test_avr64dd.py`：AVR64DD28 / AVR64DD32 の通信・NVM・HEX・Fuse・ロック・消去保護の PTY テスト
 - `tests/test_avr64du32.py`：AVR64DU32 の通信・NVM・HEX・Fuse・ロック・消去保護の PTY テスト
 - `tests/test_nvm.py`：NVM、Flash、HEX、Fuse、ロック、安全な拒否の PTY テスト
 - `tests/test_block_read.py` / `tests/block_read.cpp`：実 UPDI／シリアル層の連続読み出し境界・期限の PTY テスト（一時ディレクトリにテスト実行ファイルをビルド）
@@ -291,3 +320,9 @@ make writehex PART=AVR64DU32 HEX=firmware-du.hex ERASE_OPTIONS="--allow-eeprom-e
 - [Microchip AVR64DU28/32 データシート DS40002548A](https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/AVR64DU-28-32-Prelim-DataSheet-DS40002548.pdf)：8章（メモリ、Fuse、ロック）、11章（NVMCTRL）、33章（UPDI）。
 - [Microchip の AVR64DU32 定義](https://github.com/microchip-pic-avr-tools/pymcuprog/blob/main/pymcuprog/deviceinfo/devices/avr64du32.py) と [NVM P:4 実装](https://github.com/microchip-pic-avr-tools/pymcuprog/blob/main/pymcuprog/serialupdi/nvmp4.py)：形状、24ビットアドレス、コマンド順序、Fuse の EEPROM 書き込み方式を確認。
 - Microchip 提供の `ioavr64du32.h`：Fuse のマスク、値、32ビットロックキーを確認。
+
+### AVR64DD28 / AVR64DD32 対応で参照した資料
+
+- [Microchip AVR64DD32/28 データシート DS40002315C](https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/AVR64DD32-28-Prelim-DataSheet-DS40002315.pdf)：8章（署名・Fuse・ロック）、9章（アドレス）、11章（NVMCTRL）、36章（16バイト SIB、UPDI）。STATUS.ERROR は現行データシートの3ビット定義（`0x70`）に従います。
+- Microchip の [AVR64DD28 定義](https://github.com/microchip-pic-avr-tools/pymcuprog/blob/main/pymcuprog/deviceinfo/devices/avr64dd28.py)、[AVR64DD32 定義](https://github.com/microchip-pic-avr-tools/pymcuprog/blob/main/pymcuprog/deviceinfo/devices/avr64dd32.py)、[NVM P:2 実装](https://github.com/microchip-pic-avr-tools/pymcuprog/blob/main/pymcuprog/serialupdi/nvmp2.py)：24ビットアドレス、Flash 形状、署名、FLWR / EEERWR / CHER / NOCMD の手順を照合。
+- Microchip の [SIB 解析](https://github.com/microchip-pic-avr-tools/pymcuprog/blob/main/pymcuprog/serialupdi/application.py)：Family_ID の前後の空白を除去して照合。

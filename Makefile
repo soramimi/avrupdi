@@ -2,8 +2,8 @@
 NAME := myapp
 PROJDIR := .
 PORT ?= /dev/ttyUSB0
-PART ?= AVR64DU32
-HEX ?= example/avr64du32blink.hex
+PART ?= AVR64DD28
+HEX ?= example/avr64dd28blink.hex
 ERASE_OPTIONS ?= --allow-eeprom-erase
 
 SRCS := main.cpp
@@ -63,7 +63,8 @@ uninstall:
 
 dude:
 	#avrdude -c serialupdi -P /dev/ttyUSB0 -p attiny202 -v
-	avrdude -c serialupdi -P /dev/ttyUSB0 -p avr64du32 -v
+	#avrdude -c serialupdi -P /dev/ttyUSB0 -p avr64du32 -v
+	avrdude -c serialupdi -P /dev/ttyUSB0 -p avr64dd28 -v
 
 .PHONY: query chiperase writehex
 query: $(NAME)
@@ -74,4 +75,4 @@ chiperase: $(NAME)
 
 writehex: $(NAME)
 	@test -n "$(HEX)" || { echo "Specify HEX=firmware.hex for $(PART)" >&2; exit 1; }
-	./$(NAME) -p "$(PORT)" -t $(PART) $(ERASE_OPTIONS) --write-hex "$(HEX)" --allow-bootrow-erase
+	./$(NAME) -p "$(PORT)" -t $(PART) $(ERASE_OPTIONS) --write-hex "$(HEX)" $(if $(filter AVR64DU32 avr64du32,$(PART)),--allow-bootrow-erase,)

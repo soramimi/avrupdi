@@ -110,18 +110,20 @@ inline const Fuse &findFuse(const Device &device, const std::string &name)
 inline void validateFuse(const Device &device, const Fuse &f, uint8_t v)
 {
 	if (!f.writable) throw std::runtime_error("PDI protection configuration is read-only");
-	// Preserve the tinyAVR convention; DU reserved bits are written as zero.
-	if (device.isDu() ? (v & f.reserved) != 0 : (v & f.reserved) != f.reserved)
+	// Preserve the tinyAVR convention; DU/DD reserved bits are written as zero.
+	if (device.directWrite() ? (v & f.reserved) != 0 : (v & f.reserved) != f.reserved)
 		throw std::runtime_error("invalid reserved fuse bits");
 	if (f.offset == 0 && ((v & 15) > 11 || (v >> 4) > 11)) throw std::runtime_error("reserved watchdog value");
-	if (f.offset == 1 && ((v & 3) == 3 || (device.isDu() ? (v >> 5) > 3 :
+	if (f.offset == 1 && ((v & 3) == 3 || (device.directWrite() ? (v >> 5) > 3 :
 		((v >> 5) != 0 && (v >> 5) != 2 && (v >> 5) != 7))))
 		throw std::runtime_error("reserved BOD value");
-	if (f.offset == 2 && (device.isDu() ? (v & 7) > 1 : ((v & 3) != 1 && (v & 3) != 2)))
+	if (f.offset == 2 && (device.directWrite() ? (v & (device.isDd() ? 15 : 7)) > 1 : ((v & 3) != 1 && (v & 3) != 2)))
 		throw std::runtime_error("reserved oscillator value");
-	if (f.offset == 5 && (device.isDu() ? !(v & 0x10) : (v & 12) != 4))
+	if (f.offset == 5 && (device.directWrite() ? !(v & 0x10) : (v & 12) != 4))
 		throw std::runtime_error("refusing to disable UPDI pin");
-	if ((f.offset == 7 || f.offset == 8) && v > device.flashSize / (device.isDu() ? 512 : 256))
+	if (device.isDd() && f.offset == 6 && ((v & 0x18) != 0x08 && (v & 0x18) != 0x10))
+		throw std::runtime_error("reserved MVIO configuration");
+	if ((f.offset == 7 || f.offset == 8) && v > device.flashSize / (device.directWrite() ? 512 : 256))
 		throw std::runtime_error("section exceeds device flash");
 }
 }
