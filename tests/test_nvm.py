@@ -119,7 +119,7 @@ class NvmTest(unittest.TestCase):
     def test_hex_all_pages_preflight_before_any_write(self):
         f = self.root / 'in.hex'
         f.write_text(record(0, [1]) + record(64, [2]) + record(0, [], 1))
-        self.run_nvm(page_read(0, self.blank) + page_read(1, bytes(64)), ['--write-hex', str(f)],
+        self.run_nvm(page_read(0, self.blank) + page_read(1, bytes(64)), ['--write-hex', str(f), '--no-chip-erase'],
                      1, b'page 1 is neither blank nor identical')
 
     def test_hex_ff_padding_and_cross_page(self):
@@ -128,7 +128,7 @@ class NvmTest(unittest.TestCase):
         a, b = self.blank[:63] + b'\x01', b'\x02' + self.blank[1:]
         script = page_read(0, self.blank) + page_read(1, self.blank)
         script += program(0, a) + page_read(0, a) + program(1, b) + page_read(1, b)
-        self.run_nvm(script, ['--write-hex', str(f)])
+        self.run_nvm(script, ['--write-hex', str(f), '--no-chip-erase'])
 
     def test_hex_export_round_trip_and_last_address(self):
         f = self.root / 'out.hex'
@@ -141,7 +141,7 @@ class NvmTest(unittest.TestCase):
         self.assertEqual(lines[-1], ':00000001FF')
         self.assertEqual(lines[-2], record(0x7f0, self.data[48:]).strip())
         # Import the exported image against identical target: no NVM writes.
-        self.run_nvm(script, ['--write-hex', str(f)])
+        self.run_nvm(script, ['--write-hex', str(f), '--no-chip-erase'])
 
     def test_existing_output_is_preserved(self):
         self.run_nvm(page_read(0, self.blank), ['--read-page', '0', str(self.input)],
@@ -170,7 +170,7 @@ class NvmTest(unittest.TestCase):
                      ['--lock', '--confirm-lock'])
 
     def test_erase_requires_eeprom_authorization(self):
-        self.run_nvm(READY + [read(0x1285, 0xf6)], ['--chip-erase', '--confirm-erase'],
+        self.run_nvm(READY + [read(0x1285, 0xf6)], ['--chip-erase'],
                      1, b'--allow-eeprom-erase')
 
     def erase_script(self, saved, verify_flash=False):
@@ -184,30 +184,30 @@ class NvmTest(unittest.TestCase):
         return script + READY + [read(0x128a, 0xc5)]
 
     def test_default_erase_skips_flash_and_preserves_eeprom_when_eesave(self):
-        self.run_nvm(self.erase_script(True), ['--chip-erase', '--confirm-erase'])
+        self.run_nvm(self.erase_script(True), ['--chip-erase'])
 
     def test_default_erase_skips_flash_and_verifies_eeprom_destruction(self):
-        self.run_nvm(self.erase_script(False), ['--chip-erase', '--confirm-erase', '--allow-eeprom-erase'])
+        self.run_nvm(self.erase_script(False), ['--chip-erase', '--allow-eeprom-erase'])
 
     def test_chip_erase_verification_opt_in_reads_every_flash_page(self):
         for saved in [False, True]:
             with self.subTest(saved=saved):
                 self.run_nvm(self.erase_script(saved, verify_flash=True),
-                             ['--chip-erase', '--confirm-erase', '--verify-erase-flash', '--allow-eeprom-erase'])
+                             ['--chip-erase', '--verify-erase-flash', '--allow-eeprom-erase'])
 
     def test_default_erase_still_checks_nvm_error(self):
         script = READY + [read(0x1285, 0xf7)] + block_read(0x1400, bytes(range(64)))
         script += READY + store(0x1000, [5]) + [read(0x1002, 4)]
-        self.run_nvm(script, ['--chip-erase', '--confirm-erase'], 1, b'NVM write error')
+        self.run_nvm(script, ['--chip-erase'], 1, b'NVM write error')
 
     def test_default_erase_still_checks_lock(self):
         script = self.erase_script(True)
         script[-1] = read(0x128a, 0x3a)
-        self.run_nvm(script, ['--chip-erase', '--confirm-erase'], 1, b'lock verification failed')
+        self.run_nvm(script, ['--chip-erase'], 1, b'lock verification failed')
 
     def test_erase_verify_option_does_not_authorize_eeprom_erase(self):
         self.run_nvm(READY + [read(0x1285, 0xf6)],
-                     ['--chip-erase', '--confirm-erase', '--verify-erase-flash'],
+                     ['--chip-erase', '--verify-erase-flash'],
                      1, b'--allow-eeprom-erase')
 
     def test_help_describes_optional_flash_verification(self):
@@ -215,6 +215,67 @@ class NvmTest(unittest.TestCase):
         self.assertIn(b'--verify-erase-flash', result.stdout)
         self.assertIn(b'defaults to off', result.stdout)
         self.assertIn(b'EEPROM/lock checks remain on', result.stdout)
+        self.assertIn(b'chip erase first by default', result.stdout)
+        self.assertIn(b'--no-chip-erase', result.stdout)
+        self.assertNotIn(b'--confirm-erase', result.stdout)
+
+    def hex_input(self):
+        f = self.root / 'auto.hex'
+        f.write_text(record(0, self.data) + record(0, [], 1))
+        return str(f)
+
+    def test_hex_auto_erase_then_write_with_eeprom_preserved(self):
+        f = self.hex_input()
+        script = self.erase_script(True) + page_read(0, self.blank)
+        script += program(0, self.data) + page_read(0, self.data)
+        self.run_nvm(script, ['--write-hex', f])
+
+    def test_hex_auto_erase_eeprom_requires_permission(self):
+        self.run_nvm(READY + [read(0x1285, 0xf6)], ['--write-hex', self.hex_input()],
+                     1, b'--allow-eeprom-erase')
+
+    def test_hex_auto_erase_eeprom_when_explicitly_allowed(self):
+        script = self.erase_script(False) + page_read(0, self.blank)
+        script += program(0, self.data) + page_read(0, self.data)
+        self.run_nvm(script, ['--write-hex', self.hex_input(), '--allow-eeprom-erase'])
+
+    def test_hex_auto_erase_can_verify_all_flash(self):
+        script = self.erase_script(True, verify_flash=True) + page_read(0, self.blank)
+        script += program(0, self.data) + page_read(0, self.data)
+        self.run_nvm(script, ['--verify-erase-flash', '--write-hex', self.hex_input()])
+
+    def test_hex_auto_erase_error_stops_before_flash_write(self):
+        script = READY + [read(0x1285, 0xf7)] + block_read(0x1400, bytes(range(64)))
+        script += READY + store(0x1000, [5]) + [read(0x1002, 4)]
+        self.run_nvm(script, ['--write-hex', self.hex_input()], 1, b'NVM write error')
+
+    def test_hex_auto_erase_eeprom_verify_failure_stops_write(self):
+        script = self.erase_script(False)
+        script[-3] = packet('55 24', bytes(64))
+        self.run_nvm(script[:-2], ['--write-hex', self.hex_input(), '--allow-eeprom-erase'],
+                     1, b'EEPROM verification failed')
+
+    def test_hex_auto_erase_flash_verify_failure_stops_write(self):
+        script = READY + [read(0x1285, 0xf7)] + block_read(0x1400, bytes(range(64)))
+        script += READY + store(0x1000, [5]) + READY + page_read(0, self.data)
+        self.run_nvm(script, ['--write-hex', self.hex_input(), '--verify-erase-flash'],
+                     1, b'flash verification failed')
+
+    def test_hex_auto_erase_signature_mismatch_does_not_erase(self):
+        self.run_device(self.read_script([0x1e, 0x92, 0x23]), 2, b'Signature mismatch',
+                        args=['--write-hex', self.hex_input(), '--allow-eeprom-erase'])
+
+    def test_hex_no_erase_identical_page_is_not_written(self):
+        self.run_nvm(page_read(0, self.data), ['--no-chip-erase', '--write-hex', self.hex_input()])
+
+    def test_erase_option_scope_rejected_before_open(self):
+        for args in [['--no-chip-erase'], ['--chip-erase', '--no-chip-erase'],
+                     ['--write-page', '0', str(self.input), '--no-chip-erase'],
+                     ['--write-hex', self.hex_input(), '--chip-erase'],
+                     ['--write-hex', self.hex_input(), '--no-chip-erase', '--allow-eeprom-erase'],
+                     ['--write-hex', self.hex_input(), '--no-chip-erase', '--verify-erase-flash'],
+                     ['--write-hex', self.hex_input(), '--confirm-erase']]:
+            with self.subTest(args=args): self.reject_cli(args)
 
     def reject_cli(self, args, message=None):
         result = subprocess.run([str(APP), '/no-such-serial-port', *args], capture_output=True)
@@ -226,7 +287,7 @@ class NvmTest(unittest.TestCase):
     def test_invalid_cli_before_open(self):
         for args in [ ['--verify-erase-flash'],
                       ['--read-lock', '--verify-erase-flash'],
-                      ['--chip-erase', '--verify-erase-flash'], ['--chip-erase'], ['--lock'], ['--confirm-lock'],
+                      ['--chip-erase', '--confirm-erase'], ['--confirm-erase'], ['--lock'], ['--confirm-lock'],
                       ['--read-lock', '--allow-eeprom-erase'], ['--read-lock', '--read-fuses'],
                       ['--read-page', '32', 'out'], ['--read-page', '-1', 'out'],
                       ['--write-fuse', 'low', 'FF', '--confirm-fuse'],
@@ -253,7 +314,7 @@ class NvmTest(unittest.TestCase):
                      record(1, [], 1), record(0, [1], 2) + good + eof]:
             with self.subTest(text=text):
                 f.write_text(text)
-                self.reject_cli(['--write-hex', str(f)])
+                self.reject_cli(['--write-hex', str(f), '--allow-eeprom-erase'])
 
     def test_busy_timeout_is_bounded_and_cleans_up(self):
         master, slave = pty.openpty()
@@ -298,13 +359,13 @@ class NvmTest(unittest.TestCase):
         f.write_text(record(0, self.data) + record(64, self.data) + record(0, [], 1))
         script = page_read(0, self.blank) + page_read(1, self.blank)
         script += program(0, self.data) + page_read(0, self.blank)
-        self.run_nvm(script, ['--write-hex', str(f)], 1, b'verify mismatch')
+        self.run_nvm(script, ['--write-hex', str(f), '--no-chip-erase'], 1, b'verify mismatch')
 
     def test_chip_erase_verify_failure(self):
         script = READY + [read(0x1285, 0xf7)]
         script += block_read(0x1400, bytes(range(64)))
         script += READY + store(0x1000, [5]) + READY + page_read(0, self.data)
-        self.run_nvm(script, ['--chip-erase', '--confirm-erase', '--verify-erase-flash'], 1, b'flash verification failed')
+        self.run_nvm(script, ['--chip-erase', '--verify-erase-flash'], 1, b'flash verification failed')
 
     def test_lock_readback_failure_reports_uncertainty(self):
         script = READY + [read(0x128a, 0xc5)] + fuse_program(10, 0x3a) + READY + [read(0x128a, 0xc5)]
@@ -342,7 +403,7 @@ class NvmTest(unittest.TestCase):
         for p in range(31):
             script += page_read(p, self.blank)
         script += page_read(31, self.blank[:63] + b'\x00')
-        self.run_nvm(script, ['--chip-erase', '--confirm-erase', '--verify-erase-flash'], 1, b'flash verification failed')
+        self.run_nvm(script, ['--chip-erase', '--verify-erase-flash'], 1, b'flash verification failed')
 
     def test_erase_checks_final_eeprom_byte_preserved_and_erased(self):
         for saved in [False, True]:
@@ -350,7 +411,7 @@ class NvmTest(unittest.TestCase):
                 script = self.erase_script(saved)
                 # Last EEPROM LD response precedes READY and LOCKBIT reads.
                 script[-3] = packet('55 24', (bytes(range(63)) if saved else self.blank[:63]) + b'\x00')
-                self.run_nvm(script[:-2], ['--chip-erase', '--confirm-erase', '--allow-eeprom-erase'],
+                self.run_nvm(script[:-2], ['--chip-erase', '--allow-eeprom-erase'],
                              1, b'EEPROM verification failed')
 
     def test_hex_extended_zero_base(self):
@@ -358,4 +419,4 @@ class NvmTest(unittest.TestCase):
         for kind in (2, 4):
             with self.subTest(kind=kind):
                 f.write_text(record(0, [0, 0], kind) + record(0, self.data) + record(0, [], 1))
-                self.run_nvm(page_read(0, self.data), ['--write-hex', str(f)])
+                self.run_nvm(page_read(0, self.data), ['--write-hex', str(f), '--no-chip-erase'])

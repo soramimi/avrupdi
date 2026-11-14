@@ -346,8 +346,8 @@ int main(int argc, char **argv)
 	try {
 		std::string device = "/dev/ttyUSB0", action = "signature", path, fuse;
 		bool verbose = false, deviceSet = false, selected = false;
-		bool verifyEraseFlash = false;
-		bool confirmErase = false, allowEeprom = false, confirmFuse = false, confirmLock = false;
+		bool verifyEraseFlash = false, noChipErase = false;
+		bool allowEeprom = false, confirmFuse = false, confirmLock = false;
 		unsigned page = 0, value = 0;
 		for (int i = 1; i < argc; ++i) {
 			const std::string arg = argv[i];
@@ -356,25 +356,29 @@ int main(int argc, char **argv)
 				return argv[i];
 			};
 			if (arg == "-h" || arg == "--help") {
-				std::printf("Usage: %s [-v] [PORT] [COMMAND] [CONFIRMATION]\n"
+				std::printf("Usage: %s [-v] [PORT] [COMMAND] [OPTIONS]\n"
 					"Default: read ATtiny202 signature. One command per invocation.\n"
 					"  --read-page PAGE FILE     64-byte binary (PAGE 0..31)\n"
 					"  --write-page PAGE FILE    blank or identical page only\n"
 					"  --read-hex FILE           entire 2048-byte flash\n"
-					"  --write-hex FILE          preflight all selected pages, FF padding\n"
-					"  --chip-erase --confirm-erase [--allow-eeprom-erase] [--verify-erase-flash]\n"
+					"  --write-hex FILE          chip erase first by default, then write/verify\n"
+					"    --no-chip-erase        skip erase; all selected pages must be blank or identical\n"
+					"  --chip-erase             erase the whole chip\n"
+					"  Erase options (chip erase or write-hex without --no-chip-erase):\n"
+					"    --allow-eeprom-erase   required when EESAVE=0\n"
+					"    --verify-erase-flash   verify all Flash bytes after erase\n"
 					"    Flash erase read-back verification defaults to off; EEPROM/lock checks remain on.\n"
 					"  --read-fuses | --read-lock\n"
 					"  --write-fuse NAME HEXBYTE --confirm-fuse\n"
 					"  --lock --confirm-lock     locks memory; recovery requires chip erase\n"
 					"Fuses: WDTCFG BODCFG OSCCFG SYSCFG0 SYSCFG1 APPEND BOOTEND\n"
 					"UPDI pin disabling and locked-device erase are not supported.\n"
-					"Outputs must be new files. Writes are read-back verified; no automatic erase.\n", argv[0]);
+					"Outputs must be new files. Writes are read-back verified. HEX auto-erase removes unselected pages too.\n", argv[0]);
 				return 0;
 			}
 			if (arg == "-v") { verbose = true; continue; }
 			if (arg == "--verify-erase-flash") { verifyEraseFlash = true; continue; }
-			if (arg == "--confirm-erase") { confirmErase = true; continue; }
+			if (arg == "--no-chip-erase") { noChipErase = true; continue; }
 			if (arg == "--allow-eeprom-erase") { allowEeprom = true; continue; }
 			if (arg == "--confirm-fuse") { confirmFuse = true; continue; }
 			if (arg == "--confirm-lock") { confirmLock = true; continue; }
@@ -388,8 +392,10 @@ int main(int argc, char **argv)
 			else if (arg != "--chip-erase" && arg != "--read-fuses" && arg != "--read-lock" && arg != "--lock")
 				throw std::runtime_error("Invalid argument: " + arg);
 		}
-		if (confirmErase != (action == "--chip-erase") || ((allowEeprom || verifyEraseFlash) && action != "--chip-erase") ||
-			confirmFuse != (action == "--write-fuse") || confirmLock != (action == "--lock"))
+		const bool eraseRequested = action == "--chip-erase" || (action == "--write-hex" && !noChipErase);
+		if ((noChipErase && action != "--write-hex") || ((allowEeprom || verifyEraseFlash) && !eraseRequested))
+			throw std::runtime_error("incompatible chip erase options (use --help)");
+		if (confirmFuse != (action == "--write-fuse") || confirmLock != (action == "--lock"))
 			throw std::runtime_error("missing or unrelated confirmation option (use --help)");
 		tiny202::Image image;
 		if (action == "--write-hex") image = tiny202::readHex(path);
@@ -411,6 +417,8 @@ int main(int argc, char **argv)
 			signature = updi.readSignature();
 			if (signature == std::array<uint8_t, 3>{0x1e, 0x91, 0x23}) {
 				tiny202::Nvm<Updi> nvm(updi);
+				// HEX input is fully parsed before opening the port. Never erase to unlock.
+				if (eraseRequested) nvm.erase(allowEeprom, verifyEraseFlash);
 				if (action == "--write-page" || action == "--write-hex") nvm.write(image);
 				else if (action == "--read-page") {
 					auto data = nvm.readPage(page);
@@ -418,8 +426,7 @@ int main(int argc, char **argv)
 				} else if (action == "--read-hex") {
 					for (unsigned p = 0; p < tiny202::PageCount; ++p) image[p] = nvm.readPage(p);
 					output = tiny202::encodeHex(image);
-				} else if (action == "--chip-erase") nvm.erase(allowEeprom, verifyEraseFlash);
-				else if (action == "--write-fuse") nvm.writeFuse(tiny202::findFuse(fuse), value);
+				} else if (action == "--write-fuse") nvm.writeFuse(tiny202::findFuse(fuse), value);
 				else if (action == "--lock") { nvm.lock(); updi.verifyLocked(); }
 				else if (action == "--read-fuses") {
 					for (const auto &f : tiny202::Fuses) std::printf("%s = %02X\n", f.name, nvm.readFuse(f.offset));

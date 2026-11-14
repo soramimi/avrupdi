@@ -62,7 +62,7 @@ ATtiny202 detected
 
 ### 連続読み出し
 
-Flash の各64バイトページ（通常読み出し、HEX 出力、書き込み前確認、読み戻し検証、消去検証）と、消去前後の EEPROM 64バイトを連続読み出しします。chip erase 後の Flash 全2048バイト検証は `--verify-erase-flash` 指定時だけ行い、EEPROM の保持／消去の検証は常に行います。消去方針、confirm オプション、シグネチャ・Fuse・ステータスの単バイト読み出しは変更していません。
+Flash の各64バイトページ（通常読み出し、HEX 出力、書き込み前確認、読み戻し検証、消去検証）と、消去前後の EEPROM 64バイトを連続読み出しします。chip erase 後の Flash 全2048バイト検証は `--verify-erase-flash` 指定時だけ行い、EEPROM の保持／消去の検証は常に行います。シグネチャ・Fuse・ステータスは従来どおり単バイトで読み出します。
 
 UPDI の `ST ptr`（`55 69 addr_lo addr_hi`）で16ビットのバイトアドレスを設定し、エコーと `40` ACK を確認します。続いて `REPEAT`（`55 A0 count-1`）、`LD ptr++`（`55 24`）で指定バイト数を受信します。REPEAT と LD にターゲット ACK はありませんが、両方の送信エコーを従来どおり検証します。受信直前の flush は行いません。
 
@@ -85,30 +85,41 @@ UPDI の `ST ptr`（`55 69 addr_lo addr_hi`）で16ビットのバイトアド�
 ./myapp /dev/ttyUSB0 --read-page 0 page0.bin
 ./myapp /dev/ttyUSB0 --write-page 0 page0.bin
 ./myapp /dev/ttyUSB0 --read-hex backup.hex
+# 既定は chip erase 後に書き込み（EESAVE=1 の場合）
 ./myapp /dev/ttyUSB0 --write-hex firmware.hex
+# EESAVE=0 で EEPROM も消してよい場合
+./myapp /dev/ttyUSB0 --write-hex firmware.hex --allow-eeprom-erase
+# 消去せず書き込む場合
+./myapp /dev/ttyUSB0 --write-hex firmware.hex --no-chip-erase
 ```
 
 ページ番号は十進数または `0x` 付き16進数の 0～31、バイナリは厳密に64バイトです。Flash は2048バイト。HEX アドレスは Flash 先頭基準の **バイト単位** `0x0000`～`0x07FF` で、UPDI のシステムバスでは `0x8000` を加えます。HVPP のワードアドレスは使いません。Flash バッファはリトルエンディアンの16ビット STS でロードし、アドレス・データそれぞれの ACK を検証します。
 
 HEX はデータ（00）、EOF（01）、拡張セグメント（02）、拡張リニアアドレス（04）に対応します。長さ、チェックサム、範囲、EOF を検査し、重複アドレス（同値を含む）、EOF 後のレコード、開始アドレス（03/05）などの未対応レコードを拒否します。空行・CRLF は許容しますが、データのない入力は拒否します。出力は全領域を16バイトレコードで保存し、空の Flash も往復可能です。
 
-**書き込みは消去を伴いません。** データのある全選択ページを最初に読み、ページ全体が `FF` または入力と完全一致の場合だけ許可します。HEX の選択ページ内の未指定バイトは `FF` 埋めです。未選択ページは変更しません。完全一致ページは再書き込みせず、変更するページはバッファクリア（04）→ワード転送→ページ書き込み（01）→全64バイトの読み戻し比較を行います。後方のページが事前確認で不適合なら、前方のページも書き込みません。
+**`--write-hex` は既定で chip erase を行ってから書き込みます。** HEX 全体の入力検証をポートを開く前に完了し、対象チップと EESAVE を確認してから消去します。入力が一部のページだけでも、既存内容と完全一致でも、Flash 全2048バイトを消去するため未選択ページの既存内容も失われます。EESAVE=0 なら `--allow-eeprom-erase` が必要で、指定がなければ消去・書き込み前にエラーにします。消去なしへ自動で切り替えることはありません。
+
+`--write-hex --no-chip-erase` と `--write-page` は消去しません。この場合は未選択ページを変更しません。どちらの消去方針でも、ページ書き込み前にデータのある全選択ページを読み、ページ全体が `FF` または入力と完全一致の場合だけ許可します。HEX の選択ページ内の未指定バイトは `FF` 埋めです。完全一致ページは再書き込みせず、変更するページはバッファクリア（04）→ワード転送→ページ書き込み（01）→全64バイトの読み戻し比較を行います。後方のページが事前確認で不適合なら、前方のページも書き込みません。ただし既定の自動消去はこのページ事前確認より前に完了しています。
+
+互換性の変更：以前の `--write-hex` の消去なし動作には、今後 `--no-chip-erase` の指定が必要です。`--confirm-erase` は廃止し、指定すると引数エラーになります。`--confirm-fuse` と `--confirm-lock` の条件は変更していません。
 
 ## チップ消去
 
 ```bash
-./myapp /dev/ttyUSB0 --chip-erase --confirm-erase
+./myapp /dev/ttyUSB0 --chip-erase
 # EESAVE=0 のデバイスで EEPROM も消してよい場合だけ指定
-./myapp /dev/ttyUSB0 --chip-erase --confirm-erase --allow-eeprom-erase
+./myapp /dev/ttyUSB0 --chip-erase --allow-eeprom-erase
 # Flash 全2048バイトの読み戻し検証も行う場合
-./myapp /dev/ttyUSB0 --chip-erase --confirm-erase --allow-eeprom-erase --verify-erase-flash
+./myapp /dev/ttyUSB0 --chip-erase --allow-eeprom-erase --verify-erase-flash
 ```
 
-**Flash 全領域を消去します。** NVMCTRL の CHIP ERASE（05）を使用します。**消去後の Flash 全領域読み戻し検証はデフォルト無効（false）**です。`--verify-erase-flash` を指定した場合だけ、全32ページ・2048バイトが `FF` であることを連続読み出しで確認します。このオプションは `--chip-erase` 専用で、他コマンドと組み合わせるとポートを開く前に拒否します。
+**Flash 全領域を消去します。** NVMCTRL の CHIP ERASE（05）を使用します。**消去後の Flash 全領域読み戻し検証はデフォルト無効（false）**です。`--verify-erase-flash` を指定した場合だけ、全32ページ・2048バイトが `FF` であることを連続読み出しで確認します。このオプションは単独の `--chip-erase` と、既定の自動消去を行う `--write-hex` に適用できます。
 
 オプション化する「全領域」は **chip erase 後の Flash 全領域**だけを意味します。EEPROM 64バイトの保持／消去検証、ロック値 `C5` の確認、NVM 完了待ち・WRERROR 検査は常に行います。通常の Flash 書き込み前確認・書き込み後検証も変更しません。デフォルトの成功終了は Flash の全バイトを読み戻して消去確認したことを意味しません。
 
-EESAVE=0 なら EEPROM も消えるため、追加指定がなければコマンド発行前に拒否します。EESAVE=1 なら EEPROM の消去前内容と消去後内容を比較します。保護を外す目的で Fuse を自動変更しません。
+単独消去・HEX 書き込み時の自動消去とも、EESAVE=0 なら EEPROM も消えるため、`--allow-eeprom-erase` がなければ消去コマンド発行前に拒否します。EESAVE=1 なら EEPROM の消去前内容と消去後内容を比較します。保護を外す目的で Fuse を自動変更しません。
+
+`--no-chip-erase` は `--write-hex` 専用です。`--allow-eeprom-erase` と `--verify-erase-flash` は消去を行う場合だけ指定でき、`--no-chip-erase` や他のコマンドとの併用はポートを開く前に拒否します。`--chip-erase` と `--write-hex` は別コマンドなので同時指定できません。消去の検証・完了待ちに失敗した場合は、その後の Flash 書き込みを行いません。
 
 ロック済みデバイスではシグネチャや EESAVE を読めず、ATtiny202 と確認できません。そのため今回の実装は**ロック済みデバイスの消去／解除には非対応**です。CHIPERASE キーを送信する機能もありません。ロック後の復旧には、対象を確認して明示消去できる別のプログラマーが必要です。
 
@@ -143,6 +154,8 @@ make test
 ```
 
 Python の疑似端末（PTY）でターゲットの応答を模擬します。実機は不要です。正常な読み出しと受信の分割、シグネチャ不一致、不正・未対応の SIB、キー拒否、エコー不一致、ロック状態、応答タイムアウト、double BREAK による復帰を確認します。
+
+HEX 書き込みの既定自動消去、EESAVE=0 の拒否／許可と EEPROM 消去、消去なしの全選択ページ事前確認、消去検証失敗後の書き込み停止、不正 HEX の接続前拒否、オプションの組み合わせも検証します。
 
 PTY テストでは実際の電気的特性や UART のパリティ・ストップビットの動作は検証できません。通信設定やコマンド列を変更した場合は、実機でも確認してください。
 
