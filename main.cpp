@@ -229,6 +229,28 @@ public:
 		port_.send({0x55, 0x04, static_cast<uint8_t>(address), static_cast<uint8_t>(address >> 8)});
 		return port_.receive(1)[0];
 	}
+	Bytes readBlock(uint16_t address, size_t size)
+	{
+		// Validate before transmitting; never wrap the 16-bit data-space address.
+		if (size > 0x10000u - static_cast<size_t>(address))
+			throw std::runtime_error("UPDI block read crosses 16-bit address boundary");
+		Bytes result;
+		result.reserve(size);
+		while (result.size() < size) {
+			const size_t count = std::min<size_t>(256, size - result.size());
+			const auto current = static_cast<uint16_t>(address + result.size());
+			// ST ptr (16-bit), low byte first. Re-establish ptr for each block.
+			port_.send({0x55, 0x69, static_cast<uint8_t>(current), static_cast<uint8_t>(current >> 8)});
+			if (port_.receive(1)[0] != 0x40) throw std::runtime_error("UPDI pointer ACK rejected");
+			// REPEAT contains the number of additional executions (0..255).
+			// No target ACK for REPEAT or LD; send() still checks every echo.
+			if (count > 1) port_.send({0x55, 0xA0, static_cast<uint8_t>(count - 1)});
+			port_.send({0x55, 0x24}); // LD byte, ptr post-increment
+			const auto block = port_.receive(count); // One fixed deadline for the entire block.
+			result.insert(result.end(), block.begin(), block.end());
+		}
+		return result;
+	}
 	void writeByte(uint16_t address, uint8_t value)
 	{
 		store(address, {value});

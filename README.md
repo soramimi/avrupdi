@@ -60,6 +60,23 @@ ATtiny202 detected
 
 対象は ATtiny202 / NVM interface version 0 のみです。すべての追加操作で SIB とシグネチャを確認し、不一致の場合は書き込みません。EEPROM の独立した読み書きコマンドは対象外です。ロック状態ではエラーになり、自動消去しません。読み出し操作でもターゲットはリセットされます。
 
+### 連続読み出し
+
+Flash の各64バイトページ（通常読み出し、HEX 出力、書き込み前確認、読み戻し検証、消去検証）と、消去前後の EEPROM 64バイトを連続読み出しします。Flash 全2048バイトと EEPROM の保持／消去の検証は継続します。消去方針、confirm オプション、シグネチャ・Fuse・ステータスの単バイト読み出しは変更していません。
+
+UPDI の `ST ptr`（`55 69 addr_lo addr_hi`）で16ビットのバイトアドレスを設定し、エコーと `40` ACK を確認します。続いて `REPEAT`（`55 A0 count-1`）、`LD ptr++`（`55 24`）で指定バイト数を受信します。REPEAT と LD にターゲット ACK はありませんが、両方の送信エコーを従来どおり検証します。受信直前の flush は行いません。
+
+内部の `readBlock` は0バイトなら通信せず、1バイトなら REPEAT を省略します。256バイトを上限に分割し、ブロックごとに pointer を再設定します。16ビットアドレス範囲を超える要求は送信前に拒否します。各ブロックの応答全体に固定の1秒期限を適用し、部分受信が続いても期限を延長しません。ACK 拒否、エコー不一致、応答不足はエラーにし、不完全な結果を呼び出し元へ返しません。既存の終了処理を試みますが、通信が乱れた場合の終了処理成功までは保証できません。
+
+通信量の理論比較（正常読み出し、NVM STATUS 確認・初期化・終了処理を除外）：
+
+| 対象 | 送信処理回数：従来 → 連続読み出し | UPDI 線上のバイト数：従来 → 連続読み出し |
+| --- | --- | --- |
+| 64バイト（Flash 1ページ／EEPROM 全体1回） | 64 → 3 | 320 → 74 |
+| Flash 全2048バイト（32ページ） | 2048 → 96 | 10240 → 2368 |
+
+64バイトでは送信9バイト、ACK 1バイト、データ64バイトで合計74バイトです。送信処理回数を約95.3%、線上のバイト数を約76.9%削減します。送信エコーは同じ線上の送信を RX で観測するため、線上の時間として二重計上しません。115200 bps・8E2 の12ビット／文字だけで計算すると、Flash 全体の転送時間は約1.067秒から約0.247秒です。これは guard time、inter-byte delay、USB/UART の待ち、NVM 処理時間、OS の実行遅延を含まない理論値であり、実測の高速化率ではありません。実機の連続読み出しと所要時間は未検証です。
+
 ## Flash ページと Intel HEX
 
 従来の引数なし実行、位置引数のポート指定、`-v`、ヘルプ、シグネチャ出力と終了コードは維持します。追加コマンドは1回の起動につき1つだけ指定できます。ファイル入力と引数の検証はポートを開く前に行います。読み出し先は**新規ファイル**に限定し、既存のバックアップやシンボリックリンクを上書きしません。
@@ -153,6 +170,7 @@ PTY テストでは実際の電気的特性や UART のパリティ・ストッ�
 - `Makefile`：ビルド・実行・テスト
 - `tests/test_serialupdi.py`：既存のリンク／シグネチャ通信テスト
 - `tests/test_nvm.py`：NVM、Flash、HEX、Fuse、ロック、安全な拒否の PTY テスト
+- `tests/test_block_read.py` / `tests/block_read.cpp`：実 UPDI／シリアル層の連続読み出し境界・期限の PTY テスト（一時ディレクトリにテスト実行ファイルをビルド）
 - `AGENTS.md`：開発エージェント向けの作業指針
 
 ## 参考資料
@@ -169,3 +187,5 @@ PTY テストでは実際の電気的特性や UART のパリティ・ストッ�
 - [SYSCFG0 / EESAVE / RSTPINCFG](https://onlinedocs.microchip.com/oxy/GUID-5A56DB3A-31E1-4F46-984F-39186535C84E-en-US-7/GUID-5BE14054-06DE-4EE5-8407-A0DCF966D37B.html)、[Lockbits](https://onlinedocs.microchip.com/oxy/GUID-5A56DB3A-31E1-4F46-984F-39186535C84E-en-US-7/GUID-A3BCA5E8-61A3-45B1-85F8-79848B91C807.html)。
 - Microchip の [pymcuprog NVM P:0 実装](https://github.com/microchip-pic-avr-tools/pymcuprog/blob/main/pymcuprog/serialupdi/nvmp0.py) と [ATtiny202 定義](https://github.com/microchip-pic-avr-tools/pymcuprog/blob/main/pymcuprog/deviceinfo/devices/attiny202.py)：アドレス、形状、16ビット Flash ロード、UPDI からの直接 CTRLA 書き込み、Fuse の ADDR/DATA/WFU 手順を照合。
 - [avrhvpp のホスト実装](https://github.com/soramimi/avrhvpp/blob/8888cfd53999f4ef4bf54f60fb4ab239b29c0cd6/app/main.cpp) を読み取り専用で参考にし、選択ページ内の FF 埋めと全ページ事前確認を採用。通信プロトコルと CLI は SerialUPDI 向けであり、avrhvpp のドロップイン互換ではありません。
+
+- 連続読み出しは ATtiny202 データシートの [LD](https://onlinedocs.microchip.com/oxy/GUID-5A56DB3A-31E1-4F46-984F-39186535C84E-en-US-7/GUID-22EC0B04-1A88-4D08-A69D-B85D39FA09AE.html)、[ST](https://onlinedocs.microchip.com/oxy/GUID-5A56DB3A-31E1-4F46-984F-39186535C84E-en-US-7/GUID-530B9975-690F-48EE-9EA6-64F2F21ABF96.html) と Microchip の [pymcuprog link.py](https://github.com/microchip-pic-avr-tools/pymcuprog/blob/main/pymcuprog/serialupdi/link.py) の `st_ptr`、`repeat`、`ld_ptr_inc` に照合しました。オンライン版の REPEAT 節リンクは取得時404だったため、カウント符号化はメーカー実装でも確認しています。
