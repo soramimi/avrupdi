@@ -59,3 +59,12 @@ uninstall:
 
 dude:
 	avrdude -c serialupdi -P /dev/ttyUSB0 -p attiny202 -v
+
+query:
+	./myapp /dev/ttyUSB0 -v
+
+chiperase:
+	./myapp /dev/ttyUSB0 --chip-erase --confirm-erase --allow-eeprom-erase
+
+writehex:
+	./myapp /dev/ttyUSB0 --write-hex example/attiny202blink.hex
