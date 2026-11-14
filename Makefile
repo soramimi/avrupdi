@@ -64,7 +64,7 @@ query:
 	./myapp /dev/ttyUSB0 -v
 
 chiperase:
-	./myapp /dev/ttyUSB0 --chip-erase --confirm-erase --allow-eeprom-erase
+	./myapp /dev/ttyUSB0 --chip-erase --allow-eeprom-erase
 
 writehex:
-	./myapp /dev/ttyUSB0 --write-hex example/attiny202blink.hex
+	./myapp /dev/ttyUSB0 --allow-eeprom-erase --write-hex example/attiny202blink.hex
