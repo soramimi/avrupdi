@@ -140,10 +140,10 @@ private:
 	void log(const char *label, const Bytes &bytes) const
 	{
 		if (!verbose_) return;
-		std::fprintf(stderr, "%s:", label);
+		std::printf("%s:", label);
 		for (auto value : bytes)
-			std::fprintf(stderr, " %02X", value);
-		std::fputc('\n', stderr);
+			std::printf(" %02X", value);
+		std::putchar('\n');
 	}
 	int fd_ = -1;
 	bool saved_ = false;

@@ -2,7 +2,7 @@
 NAME := myapp
 PROJDIR := .
 PORT ?= /dev/ttyUSB0
-PART ?= AVR64DD28
+PART ?= AVR64DU32
 HEX ?= example/avr64dd28blink.hex
 ERASE_OPTIONS ?= --allow-eeprom-erase
 
@@ -63,8 +63,8 @@ uninstall:
 
 dude:
 	#avrdude -c serialupdi -P /dev/ttyUSB0 -p attiny202 -v
-	#avrdude -c serialupdi -P /dev/ttyUSB0 -p avr64du32 -v
-	avrdude -c serialupdi -P /dev/ttyUSB0 -p avr64dd28 -v
+	avrdude -c serialupdi -P /dev/ttyUSB0 -p avr64du32 -v
+	#avrdude -c serialupdi -P /dev/ttyUSB0 -p avr64dd28 -v
 
 .PHONY: query chiperase writehex
 query: $(NAME)
